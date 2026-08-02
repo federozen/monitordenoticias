@@ -139,7 +139,7 @@ def run(themes: list[dict], agenda: list[dict], source_health: list[dict], stora
 
     duration = round(time.perf_counter() - start, 3)
     storage.registrar_agent_log({
-        "agent": "orchestrator_v11",
+        "agent": "orchestrator_v13",
         "status": "ok",
         "duration_seconds": duration,
         "recommendations": len(recommendations),
