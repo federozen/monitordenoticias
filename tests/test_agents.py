@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from editorial_agents.coverage import enrich_themes
 from editorial_agents.curator import curate
@@ -137,9 +137,10 @@ if __name__ == "__main__":
 class V11DeskTests(unittest.TestCase):
     def test_ole_today_groups_multiple_angles(self):
         from editorial_agents.ole_today import build_ole_today
+        now = datetime.now(timezone.utc).isoformat()
         items = [
-            {"titulo": "River vs Central: hora, TV y formaciones", "url": "https://ole.test/river-hora"},
-            {"titulo": "River recupero a un titular para jugar con Central", "url": "https://ole.test/river-recupero"},
+            {"titulo": "River vs Central: hora, TV y formaciones", "url": "https://ole.test/river-hora", "fecha_publicacion": now, "ole_origin": "ultimas"},
+            {"titulo": "River recupero a un titular para jugar con Central", "url": "https://ole.test/river-recupero", "fecha_publicacion": now, "ole_origin": "ultimas"},
         ]
         entries, groups = build_ole_today(items, [], [])
         self.assertEqual(len(entries), 2)
@@ -152,6 +153,8 @@ class V11DeskTests(unittest.TestCase):
         items = [{
             "titulo": "River confirmo una baja para el partido",
             "url": "https://ole.test/river-baja",
+            "fecha_publicacion": datetime.now(timezone.utc).isoformat(),
+            "ole_origin": "ultimas",
         }]
         recs = [
             {
@@ -179,7 +182,8 @@ class V11DeskTests(unittest.TestCase):
             themes.append({
                 "titulo": f"Tema {idx} protagonista distinto club{idx}", "url": f"https://example.com/{idx}",
                 "cant_medios": 3, "medios_originales": ["Medio A", "Medio B"],
-                "tiene_ole": idx % 2 == 0, "nac": 1, "intl": 0, "noticias": [],
+                "tiene_ole": idx % 2 == 0, "nac": 1, "intl": 0,
+                "noticias": [{"noticia": {"titulo": f"Tema {idx}", "fecha_publicacion": now.isoformat(), "url": f"https://example.com/{idx}"}, "fuente": {"nombre": "Medio A"}}],
             })
             recs.append({
                 "cluster_id": f"c_{idx}", "title": f"Tema {idx} protagonista distinto club{idx}",
@@ -236,3 +240,52 @@ class V113CutQualityTests(unittest.TestCase):
         quality = assess(states)
         self.assertEqual(quality["state"], "COMPLETO")
         self.assertFalse(quality["preserve_previous"])
+
+
+class V114StrictTimeTests(unittest.TestCase):
+    def test_summary_4h_excludes_old_dated_topics(self):
+        from editorial_agents.desk import build_editorial_desk
+        from editorial_agents.utils import now_ar
+        now = now_ar().replace(minute=30, second=0, microsecond=0)
+        recent = now - timedelta(minutes=35)
+        old = now - timedelta(hours=9)
+        themes = [
+            {
+                "cluster_id": "c_recent", "titulo": "Tema reciente del corte",
+                "cant_medios": 2, "noticias": [{"noticia": {"titulo": "Tema reciente", "fecha_publicacion": recent.isoformat()}, "fuente": {"nombre": "Medio"}}],
+            },
+            {
+                "cluster_id": "c_old", "titulo": "Tema viejo que sigue en portada",
+                "cant_medios": 4, "noticias": [{"noticia": {"titulo": "Tema viejo", "fecha_publicacion": old.isoformat()}, "fuente": {"nombre": "Medio"}}],
+            },
+        ]
+        desk = build_editorial_desk(themes, [], [], [], [], now=now, min_topics=30, max_topics=40)
+        titles = [item["topic"] for item in desk["topics"]]
+        self.assertIn("Tema reciente del corte", titles)
+        self.assertNotIn("Tema viejo que sigue en portada", titles)
+        self.assertEqual(len(titles), 1)
+
+    def test_summary_4h_excludes_explicit_old_date_in_title(self):
+        from editorial_agents.desk import build_editorial_desk
+        from editorial_agents.utils import TZ_AR
+        now = datetime(2026, 8, 2, 18, 30, tzinfo=TZ_AR)
+        themes = [{
+            "cluster_id": "c_old_service",
+            "titulo": "Partidos de HOY, miercoles 29 de julio: agenda y TV",
+            "cant_medios": 2, "nuevo": True, "noticias": [],
+        }]
+        changes = [{"cluster_id": "c_old_service", "change_type": "NUEVO EN EL CORTE", "priority": 70}]
+        desk = build_editorial_desk(themes, changes, [], [], [], now=now)
+        self.assertEqual(desk["topics"], [])
+
+    def test_ole_today_excludes_old_publication_and_old_explicit_title(self):
+        from editorial_agents.ole_today import build_ole_today
+        from editorial_agents.utils import TZ_AR
+        now = datetime(2026, 8, 2, 18, 30, tzinfo=TZ_AR)
+        items = [
+            {"titulo": "Nota publicada hoy", "url": "https://ole.test/hoy", "fecha_publicacion": now.isoformat(), "ole_origin": "ultimas"},
+            {"titulo": "Nota publicada ayer", "url": "https://ole.test/ayer", "fecha_publicacion": (now - timedelta(days=1)).isoformat(), "ole_origin": "ultimas"},
+            {"titulo": "Partidos de HOY, miercoles 29 de julio", "url": "https://ole.test/29-julio", "ole_origin": "ultimas"},
+        ]
+        entries, _ = build_ole_today(items, [], [], now)
+        self.assertEqual([item["title"] for item in entries], ["Nota publicada hoy"])
