@@ -38,6 +38,8 @@ jobs:
           SCRAPE_MAX_WORKERS: ${{ vars.SCRAPE_MAX_WORKERS || '5' }}
           GNEWS_MIN_INTERVAL_SECONDS: ${{ vars.GNEWS_MIN_INTERVAL_SECONDS || '0.45' }}
           GNEWS_RETRY_ATTEMPTS: ${{ vars.GNEWS_RETRY_ATTEMPTS || '2' }}
+          OLE_MAX_PAGES: ${{ vars.OLE_MAX_PAGES || '8' }}
+          OLE_DETAIL_DATE_LIMIT: ${{ vars.OLE_DETAIL_DATE_LIMIT || '35' }}
           DISCOVERY_MAX_AGE_HOURS: ${{ vars.DISCOVERY_MAX_AGE_HOURS || '12' }}
           DISCOVERY_MIN_SCORE: ${{ vars.DISCOVERY_MIN_SCORE || '58' }}
           TELEGRAM_MODE: ${{ vars.TELEGRAM_MODE || 'off' }}
