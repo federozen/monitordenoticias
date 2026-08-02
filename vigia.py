@@ -59,10 +59,24 @@ def scrapear_todo() -> tuple[dict, list]:
                 via = r.get("via")
             except Exception as e:
                 noticias, error, via, duracion = [], str(e), "", 0
-            resultados[f["id"]] = noticias
-            ultimo = max((n.get("fecha_publicacion", "") for n in noticias), default="")
             canal = ("Google News" if "news.google.com" in f.get("url", "") or via == "gnews"
                      else "RSS" if f.get("es_rss") else "Web directa")
+            # Cada noticia conserva cómo fue descubierta y qué tan confiable es
+            # su fecha. Google News informa cuándo indexó/publicó el ítem en su
+            # feed, pero esa hora no siempre coincide con la publicación real
+            # del artículo: no debe bastar para entrar al resumen de 4 horas.
+            for noticia in noticias:
+                noticia.setdefault("source_id", f.get("id", ""))
+                noticia.setdefault("discovery_channel", canal)
+                if noticia.get("fecha_publicacion"):
+                    noticia.setdefault(
+                        "date_trust",
+                        "discovery_timestamp" if canal == "Google News" else "publisher_timestamp",
+                    )
+                else:
+                    noticia.setdefault("date_trust", "missing")
+            resultados[f["id"]] = noticias
+            ultimo = max((n.get("fecha_publicacion", "") for n in noticias), default="")
             estados.append({
                 "id": f["id"], "nombre": f.get("nombre", f["id"]),
                 "zona": "Nacional" if f["id"] in nac_ids else "Internacional",

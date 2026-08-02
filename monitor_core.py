@@ -645,20 +645,22 @@ def fetch_ultimas_ole() -> list:
             stop_reason = "sin_items_nuevos"
             break
 
-        # Determinar el rango de la página. Si no hay fechas, consultar primero y último.
+        # El listado de Olé no siempre expone fecha en todas las tarjetas. Para
+        # no contar notas de ayer como si fueran de hoy, completar la fecha de
+        # cada ítem sin metadata (hasta el límite configurado) consultando la
+        # propia nota. Es más costoso que mirar solo los bordes, pero se ejecuta
+        # una vez por corte y evita una memoria diaria falsa.
+        for item in page_items:
+            if (item.get("fecha_publicacion") or item.get("fecha_actualizacion")
+                    or detail_requests >= detail_limit):
+                continue
+            published, modified = _ole_article_dates(item["url"])
+            detail_requests += 1
+            item["fecha_publicacion"] = published
+            item["fecha_actualizacion"] = modified
+
         dated = [_ole_parse_datetime(item.get("fecha_publicacion", "")) for item in page_items]
         dated = [value for value in dated if value is not None]
-        if not dated and detail_requests < detail_limit:
-            for boundary in (0, len(page_items) - 1):
-                item = page_items[boundary]
-                if item.get("fecha_publicacion"):
-                    continue
-                published, modified = _ole_article_dates(item["url"])
-                detail_requests += 1
-                item["fecha_publicacion"] = published
-                item["fecha_actualizacion"] = modified
-            dated = [_ole_parse_datetime(item.get("fecha_publicacion", "")) for item in page_items]
-            dated = [value for value in dated if value is not None]
 
         newest = max(dated) if dated else None
         oldest = min(dated) if dated else None
@@ -699,7 +701,17 @@ def fetch_ultimas_ole() -> list:
         parsed = _ole_parse_datetime(item.get("fecha_publicacion", ""))
         if parsed is not None and parsed.date() == now.date():
             dated_today.append(parsed)
-    status = "completa" if reached_previous_day else ("estimada" if all_items else "parcial")
+    undated_items = sum(
+        1 for item in all_items
+        if _ole_parse_datetime(item.get("fecha_publicacion", "")) is None
+        and _ole_parse_datetime(item.get("fecha_actualizacion", "")) is None
+    )
+    if reached_previous_day and undated_items == 0:
+        status = "completa"
+    elif all_items:
+        status = "estimada" if reached_previous_day or dated_today else "parcial"
+    else:
+        status = "parcial"
     _OLE_FETCH_META = {
         "status": status,
         "pages": pages_done,
@@ -709,6 +721,7 @@ def fetch_ultimas_ole() -> list:
         "earliest_today": min(dated_today).isoformat(timespec="minutes") if dated_today else "",
         "latest_today": max(dated_today).isoformat(timespec="minutes") if dated_today else "",
         "detail_requests": detail_requests,
+        "undated_items": undated_items,
         "stop_reason": stop_reason,
     }
     return all_items
@@ -1664,7 +1677,7 @@ def _extraer_imagen_rss_item(item_raw: str) -> str:
 
     return ""
 
-CORE_VERSION = "núcleo v27 · doble radar + cobertura Ole + hallazgos"
+CORE_VERSION = "núcleo v28 · frescura verificada + Ole diario estricto"
 MAX_ANTIGUEDAD_HORAS = int(os.environ.get("MAX_ANTIGUEDAD_HORAS", "18") or 18)  # ventana editorial configurable
 
 
@@ -2438,6 +2451,9 @@ def _fallback_gnews(fuente: dict, motivo_original: str) -> dict:
         noticias = extraer_rss(resp.text)
         for n in noticias:
             n["titulo"] = _limpiar_titulo_gnews(n["titulo"])
+            n["source_id"] = fuente.get("id", "")
+            n["discovery_channel"] = "Google News"
+            n["date_trust"] = "discovery_timestamp" if n.get("fecha_publicacion") else "missing"
         if noticias:
             return {"id": fuente["id"], "noticias": noticias[:MAX_ITEMS],
                     "error": None, "via": "gnews"}
@@ -2458,11 +2474,20 @@ def fetch_fuente(fuente: dict) -> dict:
         if fuente.get("es_rss"):
             resp.encoding = resp.encoding or "utf-8"
             noticias = extraer_rss(resp.text)
+            is_gnews_feed = "news.google.com" in fuente.get("url", "")
             for n in noticias:
                 n["titulo"] = _limpiar_titulo_gnews(n["titulo"])
+                n["source_id"] = fuente.get("id", "")
+                n["discovery_channel"] = "Google News" if is_gnews_feed else "RSS"
+                n["date_trust"] = (
+                    "discovery_timestamp" if is_gnews_feed and n.get("fecha_publicacion")
+                    else "publisher_timestamp" if n.get("fecha_publicacion")
+                    else "missing"
+                )
             noticias = noticias[:MAX_ITEMS]
             if noticias:
-                return {"id": fuente["id"], "noticias": noticias, "error": None}
+                return {"id": fuente["id"], "noticias": noticias, "error": None,
+                        "via": "gnews" if is_gnews_feed else "rss"}
             # si el feed vino vacío y permite fallback, intentarlo
             if not fuente.get("sin_fallback"):
                 return _fallback_gnews(fuente, "feed rss vacío")
@@ -2493,6 +2518,10 @@ def fetch_fuente(fuente: dict) -> dict:
         resp.encoding = encoding
         noticias = extraer_generico(resp.text, fuente)
         if noticias:
+            for n in noticias:
+                n.setdefault("source_id", fuente.get("id", ""))
+                n.setdefault("discovery_channel", "Web directa")
+                n.setdefault("date_trust", "publisher_timestamp" if n.get("fecha_publicacion") else "missing")
             # fuentes flacas marcadas: complementar el directo con Google News (dedup)
             if fuente.get("gnews_extra") and len(noticias) < 25:
                 extra = _fallback_gnews(fuente, "")

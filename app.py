@@ -695,7 +695,8 @@ def page_desk(data: dict) -> None:
     c3.metric("Hallazgos", len(findings))
     ole_status = str((data.get("control") or {}).get("ole_cobertura_dia") or "").strip().lower()
     ole_pages = (data.get("control") or {}).get("ole_paginas_revisadas") or ""
-    c4.metric("Notas de Olé hoy", len(ole_today), delta=f"{ole_pages} pág." if ole_pages else None)
+    ole_metric_delta = f"{ole_updated_only} actualizada(s) · {ole_pages} pág." if ole_pages else f"{ole_updated_only} actualizada(s)"
+    c4.metric("Publicadas por Olé hoy", ole_published_today, delta=ole_metric_delta)
     if rows:
         st.info(f"Corte: {rows[0].get('Desde','')} a {rows[0].get('Hasta','')} · actualizado {rows[0].get('Generado','')}")
     tabs = st.tabs(["Resumen 4H", "Acciones", "Olé hoy", "Hallazgos", "Fuentes", "Parte ampliado"])
