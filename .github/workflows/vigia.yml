@@ -1,4 +1,4 @@
-name: Monitor V12 - mesa editorial confiable
+name: Monitor V13 - mesa editorial confiable
 
 on:
   schedule:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: monitor-editorial-v12
+  group: monitor-editorial-v13
   cancel-in-progress: false
 
 jobs:
@@ -41,7 +41,8 @@ jobs:
           STALE_DATE_VERIFY_LIMIT: ${{ vars.STALE_DATE_VERIFY_LIMIT || '8' }}
           OLE_OLD_STREAK_REQUIRED: ${{ vars.OLE_OLD_STREAK_REQUIRED || '6' }}
           OLE_MAX_PAGES: ${{ vars.OLE_MAX_PAGES || '20' }}
-          OLE_DETAIL_DATE_LIMIT: ${{ vars.OLE_DETAIL_DATE_LIMIT || '180' }}
+          OLE_DETAIL_DATE_LIMIT: ${{ vars.OLE_DETAIL_DATE_LIMIT || '220' }}
+          OLE_MIN_COMPLETE_ITEMS: ${{ vars.OLE_MIN_COMPLETE_ITEMS || '35' }}
           DISCOVERY_MAX_AGE_HOURS: ${{ vars.DISCOVERY_MAX_AGE_HOURS || '12' }}
           DISCOVERY_MIN_SCORE: ${{ vars.DISCOVERY_MIN_SCORE || '62' }}
           TELEGRAM_MODE: ${{ vars.TELEGRAM_MODE || 'off' }}
