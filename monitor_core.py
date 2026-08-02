@@ -473,8 +473,18 @@ def fetch_ultimas_ole() -> list:
                 titulo = slug.replace("-", " ").capitalize()
                 if len(titulo) < 16:
                     continue
+            fecha_publicacion = ""
+            time_el = cont.find("time")
+            if time_el:
+                fecha_publicacion = str(
+                    time_el.get("datetime") or time_el.get("dateTime")
+                    or time_el.get("content") or ""
+                ).strip()
             vistos.add(href)
-            out.append({"titulo": titulo[:250], "url": href, "imagen": ""})
+            out.append({
+                "titulo": titulo[:250], "url": href, "imagen": "",
+                "fecha_publicacion": fecha_publicacion,
+            })
         return out[:MAX_ITEMS]
     except Exception:
         return []

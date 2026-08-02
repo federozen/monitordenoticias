@@ -195,13 +195,17 @@ def main():
         except Exception:
             prev = []
     monitor_core.CRITERIOS_EDITOR = cfg.get("criterios", "")
-    cubiertos, nuevas_ole, ole_coverage = [], [], []
+    cubiertos, nuevas_ole, ole_coverage, ole_today_items = [], [], [], []
     if not simulacro:
         # persistir lo publicado por Olé en su pestaña, por tres vías:
         # portada (lo destacado) + /ultimas-noticias (TODO, al minuto) + Google News (respaldo)
-        portada = list(resultados.get("ole", []))
-        ultimas = fetch_ultimas_ole()
-        gnews_ole = fetch_cobertura_ole_gnews()
+        portada = [{**item, "ole_origin": "portada"} for item in resultados.get("ole", [])]
+        ultimas = [{**item, "ole_origin": "ultimas"} for item in fetch_ultimas_ole()]
+        gnews_ole = [{**item, "ole_origin": "gnews"} for item in fetch_cobertura_ole_gnews()]
+        # OLE_HOY usa solo el flujo cronologico y el respaldo fechado. La
+        # portada y la memoria de cinco dias siguen sirviendo para comparar
+        # cobertura, pero no deben contaminar la vista "hoy".
+        ole_today_items = ultimas + gnews_ole
         print(f"   cobertura Olé: portada {len(portada)} · últimas {len(ultimas)} · gnews {len(gnews_ole)}")
         if legacy_memory:
             nuevas_ole = mem.registrar_cobertura_ole(portada + ultimas + gnews_ole)
@@ -332,7 +336,7 @@ def main():
                 tendencias, agenda, estados_fuentes, online,
                 send_telegram=enviar_telegram, config=cfg,
                 raw_results=resultados, ole_coverage=ole_coverage,
-                previous_themes=previous_themes,
+                ole_today_items=ole_today_items, previous_themes=previous_themes,
                 panorama_themes=panorama_themes,
                 cut_quality=quality,
             )

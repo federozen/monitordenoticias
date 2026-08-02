@@ -678,7 +678,7 @@ def page_desk(data: dict) -> None:
     c1.metric("Temas del corte", len(rows))
     c2.metric("Acciones pendientes", len(actions))
     c3.metric("Hallazgos", len(findings))
-    c4.metric("Notas de Olé detectadas", len(ole_today))
+    c4.metric("Notas de Olé hoy", len(ole_today))
     if rows:
         st.info(f"Corte: {rows[0].get('Desde','')} a {rows[0].get('Hasta','')} · actualizado {rows[0].get('Generado','')}")
     tabs = st.tabs(["Resumen 4H", "Acciones", "Olé hoy", "Hallazgos", "Fuentes", "Parte ampliado"])
