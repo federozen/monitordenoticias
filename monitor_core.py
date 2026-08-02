@@ -154,6 +154,18 @@ STOPWORDS = set([
 ])
 
 # ─── SIMILITUD SEMÁNTICA ──────────────────────────────────────────────────────
+def normalize_text(text: str) -> str:
+    """Normaliza texto corto para etiquetas y controles de navegacion.
+
+    Devuelve una cadena minuscula, sin tildes y con espacios simples. Se
+    mantiene en monitor_core para evitar dependencias circulares con los
+    modulos editoriales.
+    """
+    raw = unicodedata.normalize("NFD", str(text or "").lower())
+    raw = "".join(ch for ch in raw if unicodedata.category(ch) != "Mn")
+    return re.sub(r"[^a-z0-9]+", " ", raw).strip()
+
+
 @lru_cache(maxsize=8192)
 def normalizar_titulo(titulo: str) -> set:
     t = titulo.lower()
