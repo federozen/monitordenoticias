@@ -133,3 +133,47 @@ class EditorialAgentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class V11DeskTests(unittest.TestCase):
+    def test_ole_today_groups_multiple_angles(self):
+        from editorial_agents.ole_today import build_ole_today
+        items = [
+            {"titulo": "River vs Central: hora, TV y formaciones", "url": "https://ole.test/river-hora"},
+            {"titulo": "River recupero a un titular para jugar con Central", "url": "https://ole.test/river-recupero"},
+        ]
+        entries, groups = build_ole_today(items, [], [])
+        self.assertEqual(len(entries), 2)
+        self.assertTrue(groups)
+        self.assertTrue(all(item.get("topic_id") for item in entries))
+
+    def test_editorial_desk_builds_free_summary_and_actions(self):
+        from editorial_agents.desk import build_editorial_desk
+        now = datetime.now(timezone.utc)
+        themes = []
+        recs = []
+        for idx in range(35):
+            themes.append({
+                "titulo": f"Tema {idx} protagonista distinto club{idx}", "url": f"https://example.com/{idx}",
+                "cant_medios": 3, "medios_originales": ["Medio A", "Medio B"],
+                "tiene_ole": idx % 2 == 0, "nac": 1, "intl": 0, "noticias": [],
+            })
+            recs.append({
+                "cluster_id": f"c_{idx}", "title": f"Tema {idx} protagonista distinto club{idx}",
+                "priority": 90 - idx, "action": "ACTUALIZAR" if idx < 4 else "OBSERVAR",
+                "coverage_status": "CUBIERTO_CON_NOVEDAD" if idx < 4 else "CUBIERTO_IGUAL",
+            })
+            themes[-1]["cluster_id"] = f"c_{idx}"
+        desk = build_editorial_desk(themes, [], recs, [], [], now=now, min_topics=30, max_topics=40)
+        self.assertGreaterEqual(len(desk["topics"]), 30)
+        self.assertLessEqual(len(desk["topics"]), 40)
+        self.assertEqual(len(desk["actions"]), 4)
+        self.assertTrue(desk["meta"]["cut_key"])
+
+    def test_source_health_is_editor_friendly(self):
+        from editorial_agents.source_health import build_source_editor_view
+        rows = build_source_editor_view([
+            {"id": "x", "nombre": "Fuente X", "estado": "error", "noticias": 0, "error": "timeout"},
+            {"id": "y", "nombre": "Fuente Y", "estado": "ok", "noticias": 10, "canal": "RSS"},
+        ])
+        self.assertEqual(rows[0]["editorial_state"], "DEMORADA")
+        self.assertEqual(rows[-1]["editorial_state"], "SALUDABLE")
