@@ -249,7 +249,8 @@ class V114StrictTimeTests(unittest.TestCase):
         from editorial_agents.desk import build_editorial_desk
         from editorial_agents.utils import now_ar
         now = now_ar().replace(minute=30, second=0, microsecond=0)
-        recent = now - timedelta(minutes=35)
+        cut_start = now.replace(hour=(now.hour // 4) * 4, minute=0, second=0, microsecond=0)
+        recent = cut_start + timedelta(minutes=10)
         old = now - timedelta(hours=9)
         themes = [
             {
@@ -518,3 +519,61 @@ class V12EditorialTrustTests(unittest.TestCase):
         entries, groups = build_ole_today(items, [], [], now)
         self.assertEqual({row["publication_type"] for row in entries}, {"PUBLICADA_HOY", "ACTUALIZADA_HOY"})
         self.assertEqual(sum(row["piece_count"] for row in groups), 2)
+
+
+class V13HybridFreshnessTests(unittest.TestCase):
+    def test_direct_rss_timestamp_is_probable_and_visible(self):
+        from editorial_agents.desk import build_editorial_desk
+        from editorial_agents.utils import TZ_AR
+        now = datetime(2026, 8, 2, 19, 30, tzinfo=TZ_AR)
+        themes = [{
+            "cluster_id": "c_probable", "titulo": "El club informó una novedad en su entrenamiento",
+            "noticias": [{"noticia": {
+                "titulo": "El club informó una novedad en su entrenamiento",
+                "fecha_publicacion": (now - timedelta(minutes=20)).isoformat(),
+                "date_trust": "rss_publisher_timestamp",
+            }, "fuente": {"nombre": "Medio directo"}}],
+        }]
+        desk = build_editorial_desk(themes, [], [], [], [], now=now)
+        self.assertEqual(len(desk["topics"]), 1)
+        self.assertEqual(desk["topics"][0]["freshness_status"], "PROBABLE")
+
+    def test_undated_theme_goes_to_audit_not_summary(self):
+        from editorial_agents.desk import build_editorial_desk
+        from editorial_agents.utils import TZ_AR
+        now = datetime(2026, 8, 2, 19, 30, tzinfo=TZ_AR)
+        themes = [{"cluster_id": "c_candidate", "titulo": "Tema sin fecha para verificar", "noticias": []}]
+        desk = build_editorial_desk(themes, [], [], [], [], now=now)
+        self.assertEqual(desk["topics"], [])
+        self.assertEqual(desk["audit"][0]["status"], "CANDIDATO")
+        self.assertEqual(desk["audit"][0]["destination"], "PARA VERIFICAR")
+
+    def test_article_metadata_is_confirmed(self):
+        from editorial_agents.desk import build_editorial_desk
+        from editorial_agents.utils import TZ_AR
+        now = datetime(2026, 8, 2, 19, 30, tzinfo=TZ_AR)
+        themes = [{
+            "cluster_id": "c_confirmed", "titulo": "La liga confirmó un cambio de horario",
+            "noticias": [{"noticia": {
+                "titulo": "La liga confirmó un cambio de horario",
+                "fecha_publicacion": (now - timedelta(minutes=10)).isoformat(),
+                "article_published_at": (now - timedelta(minutes=10)).isoformat(),
+                "date_trust": "article_metadata",
+            }, "fuente": {"nombre": "Liga oficial"}}],
+        }]
+        desk = build_editorial_desk(themes, [], [], [], [], now=now)
+        self.assertEqual(desk["topics"][0]["freshness_status"], "CONFIRMADO")
+
+    def test_ole_home_only_adds_verified_today(self):
+        from unittest.mock import patch
+        import monitor_core
+        now = datetime.now(monitor_core._OLE_TZ)
+        today = now.replace(hour=12, minute=0, second=0, microsecond=0).isoformat()
+        yesterday = (now - timedelta(days=1)).isoformat()
+        items = [
+            {"titulo": "Nota destacada de hoy", "url": "https://www.ole.com.ar/a"},
+            {"titulo": "Nota destacada vieja", "url": "https://www.ole.com.ar/b"},
+        ]
+        with patch.object(monitor_core, "_ole_article_dates", side_effect=[(today, ""), (yesterday, "")]):
+            result = monitor_core.enrich_ole_home_today(items, set(), limit=10)
+        self.assertEqual([row["titulo"] for row in result], ["Nota destacada de hoy"])
