@@ -96,17 +96,23 @@ def _belongs_to_today(item: dict, title: str, first_seen_value: str, now: dateti
     # Una fecha escrita en el titulo tiene prioridad para eliminar servicios viejos.
     if explicit is not None and explicit.date() != now.date():
         return False
-    if published is not None:
-        return published.date() == now.date()
-    if updated is not None:
-        return updated.date() == now.date()
+    if published is not None and published.date() == now.date():
+        return True
+    if updated is not None and updated.date() == now.date():
+        return True
+    if published is not None or updated is not None:
+        return False
 
-    # Las entradas de /ultimas-noticias sin metadata se aceptan solo cuando
-    # fueron detectadas hoy. Portada y memoria sin fecha no son prueba de que
-    # la nota haya sido publicada hoy.
+    # Las entradas de /ultimas-noticias sin metadata se aceptan solo en las
+    # primeras páginas y si fueron detectadas hoy. Es una red de seguridad:
+    # evita que una paginación sin fechas mezcle notas viejas con Olé Hoy.
     origin = str(item.get("ole_origin") or item.get("origen_ole") or "").lower()
     first_seen_dt = parse_datetime(first_seen_value)
-    if origin == "ultimas":
+    try:
+        page = int(item.get("ole_page") or 1)
+    except Exception:
+        page = 1
+    if origin == "ultimas" and page <= 2:
         return first_seen_dt is None or first_seen_dt.date() == now.date()
     return False
 
@@ -132,18 +138,26 @@ def build_ole_today(ole_items: list[dict] | None, previous: list[dict] | None = 
 
     entries: list[dict] = []
     seen: set[str] = set()
+    seen_titles: set[str] = set()
     for item in ole_items or []:
         title = str(item.get("titulo") or item.get("title") or "").strip()
         url = str(item.get("url") or "").strip()
         if len(title) < 8:
             continue
-        key = url or normalize_text(title)
+        normalized_title = normalize_text(title)
+        key = url or normalized_title
         if not key or key in seen:
+            continue
+        # Google News puede devolver la misma nota con una URL de redirección.
+        # Un título exactamente igual no debe contarse como una segunda pieza.
+        if normalized_title and normalized_title in seen_titles:
             continue
         first_seen_value = first_seen.get(key, now_iso)
         if not _belongs_to_today(item, title, first_seen_value, now):
             continue
         seen.add(key)
+        if normalized_title:
+            seen_titles.add(normalized_title)
         related = list(recommendation_by_ole_url.get(url, []))
         if not related:
             scored = []
@@ -200,6 +214,12 @@ def build_ole_today(ole_items: list[dict] | None, previous: list[dict] | None = 
         for entry in members:
             entry["topic_id"] = topic_id
             entry["topic"] = topic
+        def _event_time(item):
+            return (parse_datetime(item.get("updated_at"))
+                    or parse_datetime(item.get("published_at"))
+                    or parse_datetime(item.get("first_seen"))
+                    or now)
+        latest_member = max(members, key=_event_time)
         coverage_rows.append({
             "topic_id": topic_id,
             "topic": topic,
@@ -208,14 +228,23 @@ def build_ole_today(ole_items: list[dict] | None, previous: list[dict] | None = 
             "focuses": unique_strings([item.get("focus", "") for item in members]),
             "first_seen": min(item.get("first_seen", now_iso) for item in members),
             "last_seen": max(item.get("last_seen", now_iso) for item in members),
-            "last_title": members[-1]["title"],
-            "last_url": members[-1]["url"],
+            "last_title": latest_member["title"],
+            "last_url": latest_member["url"],
             "titles": [item["title"] for item in members],
             "external_updates": all_external,
             "suggested_action": " | ".join(actions) if actions else "YA CUBIERTO / SEGUIR",
             "overcoverage": len(members) >= 5,
         })
 
-    entries.sort(key=lambda item: (item.get("last_seen", ""), item.get("title", "")), reverse=True)
+    entries.sort(
+        key=lambda item: (
+            parse_datetime(item.get("updated_at"))
+            or parse_datetime(item.get("published_at"))
+            or parse_datetime(item.get("first_seen"))
+            or now,
+            item.get("title", ""),
+        ),
+        reverse=True,
+    )
     coverage_rows.sort(key=lambda item: (-item["piece_count"], item["topic"]))
     return entries, coverage_rows

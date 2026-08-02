@@ -68,6 +68,7 @@ GLOBAL_HINTS = {
 QUALITY_SOURCE_IDS = {
     "bbc", "guardian", "reuters_dep", "efe", "afp_f24", "fifa", "uefa", "conmebol",
     "athletic", "lequipe", "gazzetta", "globo", "geglobo", "skysports", "kicker",
+    "sportspro", "frontoffice", "olympics",
 }
 
 
