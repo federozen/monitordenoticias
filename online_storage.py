@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
@@ -20,7 +21,7 @@ except Exception:  # pragma: no cover
 
 _TZ_AR = timezone(timedelta(hours=-3))
 _CONF = {"json": None, "sheet_id": None, "prefix": None}
-_CACHE = {"sheet": None}
+_CACHE = {"sheet": None, "worksheets": None, "records": {}}
 
 NOTICIAS_HEADERS = [
     "RunTS", "NoticiaID", "FuenteID", "FuenteConfigurada", "PublisherOriginal",
@@ -119,6 +120,8 @@ def configure(service_account_json: str | None = None, sheet_id: str | None = No
     if prefix is not None:
         _CONF["prefix"] = prefix
     _CACHE["sheet"] = None
+    _CACHE["worksheets"] = None
+    _CACHE["records"] = {}
 
 
 def _credentials() -> tuple[str, str]:
@@ -143,6 +146,23 @@ def nombre_pestana(base: str) -> str:
     return f"{prefix()}{base}"[:100]
 
 
+def _is_quota_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "429" in text or "quota exceeded" in text or "rate limit" in text
+
+
+def _api_call(callable_, *, attempts: int = 4):
+    """Ejecuta una llamada a Sheets y espera si Google aplica el limite por minuto."""
+    delays = (5, 15, 35)
+    for attempt in range(attempts):
+        try:
+            return callable_()
+        except Exception as exc:
+            if not _is_quota_error(exc) or attempt >= attempts - 1:
+                raise
+            time.sleep(delays[min(attempt, len(delays) - 1)])
+
+
 def _sheet():
     if _CACHE["sheet"] is not None:
         return _CACHE["sheet"]
@@ -150,18 +170,33 @@ def _sheet():
         raise RuntimeError("Faltan GOOGLE_SERVICE_ACCOUNT_JSON o SHEET_ID")
     sa, sid = _credentials()
     client = gspread.service_account_from_dict(json.loads(sa))
-    _CACHE["sheet"] = client.open_by_key(sid)
+    _CACHE["sheet"] = _api_call(lambda: client.open_by_key(sid))
     return _CACHE["sheet"]
+
+
+def _worksheet_map() -> dict[str, Any]:
+    """Carga una sola vez todas las pestanas y evita una lectura por cada _ws()."""
+    if _CACHE.get("worksheets") is None:
+        worksheets = _api_call(lambda: _sheet().worksheets())
+        _CACHE["worksheets"] = {ws.title: ws for ws in worksheets}
+    return _CACHE["worksheets"]
+
+
+def _invalidate_records(base: str) -> None:
+    _CACHE.setdefault("records", {}).pop(nombre_pestana(base), None)
 
 
 def _ws(base: str, headers: list[str], rows: int = 1000):
     sh = _sheet()
     name = nombre_pestana(base)
-    try:
-        ws = sh.worksheet(name)
-    except gspread.WorksheetNotFound:
-        ws = sh.add_worksheet(title=name, rows=rows, cols=max(len(headers), 3))
-        ws.update(range_name="A1", values=[headers])
+    worksheets = _worksheet_map()
+    ws = worksheets.get(name)
+    if ws is None:
+        ws = _api_call(lambda: sh.add_worksheet(
+            title=name, rows=rows, cols=max(len(headers), 3)
+        ))
+        _api_call(lambda: ws.update(range_name="A1", values=[headers]))
+        worksheets[name] = ws
     return ws
 
 
@@ -209,12 +244,13 @@ def _replace(base: str, headers: list[str], rows: Iterable[Iterable[Any]],
     ws = _ws(base, headers, rows=target_rows)
     try:
         if ws.row_count < target_rows or ws.col_count < target_cols:
-            ws.resize(rows=max(ws.row_count, target_rows),
-                      cols=max(ws.col_count, target_cols))
+            _api_call(lambda: ws.resize(rows=max(ws.row_count, target_rows),
+                                        cols=max(ws.col_count, target_cols)))
     except Exception:
         pass
-    ws.clear()
-    ws.update(range_name="A1", values=values, value_input_option="RAW")
+    _api_call(ws.clear)
+    _api_call(lambda: ws.update(range_name="A1", values=values, value_input_option="RAW"))
+    _invalidate_records(base)
     return max(0, len(values) - 1)
 
 
@@ -318,12 +354,19 @@ def guardar_snapshot_online(resultados: dict, tendencias: list, agenda: list,
 
 
 def _records(base: str, headers: list[str]) -> list[dict]:
+    cache_key = nombre_pestana(base)
+    cached = _CACHE.setdefault("records", {}).get(cache_key)
+    if cached is not None:
+        return [dict(row) for row in cached]
     try:
-        values = _ws(base, headers).get_all_values()
+        values = _api_call(lambda: _ws(base, headers).get_all_values())
         if len(values) < 2:
-            return []
-        keys = values[0]
-        return [dict(zip(keys, row + [""] * (len(keys) - len(row)))) for row in values[1:]]
+            records = []
+        else:
+            keys = values[0]
+            records = [dict(zip(keys, row + [""] * (len(keys) - len(row)))) for row in values[1:]]
+        _CACHE["records"][cache_key] = records
+        return [dict(row) for row in records]
     except Exception:
         return []
 
@@ -356,10 +399,11 @@ def guardar_feedback(cluster: str, titulo: str, accion_sugerida: str,
     try:
         asegurar_estructura()
         now = datetime.now(_TZ_AR)
-        _ws("Feedback", FEEDBACK_HEADERS, rows=500).append_row([
+        _api_call(lambda: _ws("Feedback", FEEDBACK_HEADERS, rows=500).append_row([
             now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S"), cluster, titulo,
             accion_sugerida, accion_editor, util, termino_en_nota, comentario,
-        ], value_input_option="RAW")
+        ], value_input_option="RAW"))
+        _invalidate_records("Feedback")
         return True
     except Exception:
         return False
@@ -464,12 +508,14 @@ def leer_resumen() -> dict:
 def _append(base: str, headers: list[str], row: list[Any], max_rows: int = 1500) -> bool:
     try:
         ws = _ws(base, headers, rows=max_rows)
-        ws.append_row([_safe(value) for value in row], value_input_option="RAW")
+        _api_call(lambda: ws.append_row([_safe(value) for value in row], value_input_option="RAW"))
+        _invalidate_records(base)
         if ws.row_count > max_rows * 2:
-            values = ws.get_all_values()
+            values = _api_call(ws.get_all_values)
             kept = [values[0]] + values[-(max_rows - 1):]
-            ws.clear()
-            ws.update(range_name="A1", values=kept, value_input_option="RAW")
+            _api_call(ws.clear)
+            _api_call(lambda: ws.update(range_name="A1", values=kept, value_input_option="RAW"))
+            _invalidate_records(base)
         return True
     except Exception:
         return False
@@ -574,12 +620,19 @@ def _append_rows(base: str, headers: list[str], rows: list[list[Any]], max_rows:
         return 0
     try:
         ws = _ws(base, headers, rows=max_rows)
-        ws.append_rows([[_safe(value) for value in row] for row in rows], value_input_option="RAW")
-        values = ws.get_all_values()
-        if len(values) > max_rows:
-            kept = [values[0]] + values[-(max_rows - 1):]
-            ws.clear()
-            ws.update(range_name="A1", values=kept, value_input_option="RAW")
+        _api_call(lambda: ws.append_rows(
+            [[_safe(value) for value in row] for row in rows], value_input_option="RAW"
+        ))
+        _invalidate_records(base)
+        # El historial se depura solo cuando la hoja ya es muy grande. Evita una
+        # lectura completa en cada corte de cuatro horas.
+        if ws.row_count > max_rows * 2:
+            values = _api_call(ws.get_all_values)
+            if len(values) > max_rows:
+                kept = [values[0]] + values[-(max_rows - 1):]
+                _api_call(ws.clear)
+                _api_call(lambda: ws.update(range_name="A1", values=kept, value_input_option="RAW"))
+                _invalidate_records(base)
         return len(rows)
     except Exception:
         return 0
@@ -624,7 +677,7 @@ def _format_editorial_sheet(base: str, widths: list[int], tab_color: dict | None
                     "fields": "pixelSize",
                 }
             })
-        _sheet().batch_update({"requests": requests})
+        _api_call(lambda: _sheet().batch_update({"requests": requests}))
     except Exception:
         pass
 
