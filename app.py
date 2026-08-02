@@ -21,7 +21,7 @@ import sheets_memoria
 TZ_AR = timezone(timedelta(hours=-3))
 
 st.set_page_config(
-    page_title="Monitor Deportivo V12",
+    page_title="Monitor Deportivo V13",
     page_icon="MD",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -66,6 +66,7 @@ def load_data() -> dict:
         "ole_today": store.leer_ole_hoy(),
         "ole_coverage_editor": store.leer_cobertura_ole_editor(),
         "findings_editor": store.leer_hallazgos_editor(),
+        "audit_editor": store.leer_auditoria_editor(),
         "sources_editor": store.leer_fuentes_editor(),
         "social_inbox": store.leer_buzon_social(),
         "ai_parts": store.leer_partes_ia(50),
@@ -343,7 +344,7 @@ def page_now(data: dict) -> None:
     discoveries = data["discoveries"]
     sources = data["sources"]
 
-    st.title("Monitor Deportivo V12")
+    st.title("Monitor Deportivo V13")
     st.caption("Un resumen del corte, los cambios concretos para agregar y un radar de hallazgos que evita navegar fuente por fuente.")
     render_cut_quality(control)
     last = control.get("ultima_actualizacion", "Sin datos")
@@ -403,7 +404,7 @@ def page_now(data: dict) -> None:
             st.write(f"**{source.get('Fuente')}** - {source.get('Error') or 'sin noticias'}")
 
 def page_assistant(data: dict) -> None:
-    st.title("Asistente editorial V12")
+    st.title("Asistente editorial V13")
     recs = data["recommendations"]
     discoveries = data["discoveries"]
     opportunities = data["opportunities"]
@@ -564,10 +565,16 @@ def render_summary_row(row: dict) -> None:
     action = row.get("Accion") or "INFORMARSE"
     with st.container(border=True):
         st.markdown(f"### {row.get('Orden','')}. {_row_link(row.get('Tema',''), row.get('URLPrincipal',''))}", unsafe_allow_html=True)
+        actuality = row.get("Actualidad") or "SIN CLASIFICAR"
         st.caption(
-            f"{row.get('Importancia','')} | {row.get('Seccion','')} | {action} | "
+            f"{actuality} | {row.get('Importancia','')} | {row.get('Seccion','')} | {action} | "
             f"prioridad {row.get('Prioridad','0')} | {row.get('Medios','0')} medios | Olé: {row.get('EstadoOle','')}"
         )
+        if row.get("FechaReferencia"):
+            st.caption(
+                f"Fecha de referencia: {row.get('FechaReferencia')} · "
+                f"origen: {row.get('OrigenFecha','')} · {row.get('MotivoActualidad','')}"
+            )
         if row.get("QuePaso"):
             st.write(row.get("QuePaso"))
         if row.get("QueCambio"):
@@ -703,25 +710,47 @@ def page_desk(data: dict) -> None:
     discovery_rows = data.get("discoveries") or []
     candidates = [row for row in discovery_rows if row.get("Estado") == "CANDIDATO"]
     source_rows = data.get("sources_editor") or []
-    st.title("Mesa editorial V12")
+    audit_rows = data.get("audit_editor") or []
+    confirmed_rows = [row for row in rows if row.get("Actualidad") == "CONFIRMADO"]
+    probable_rows = [row for row in rows if row.get("Actualidad") == "PROBABLE"]
+    candidate_audit = [row for row in audit_rows if row.get("EstadoActualidad") == "CANDIDATO"]
+    st.title("Mesa editorial V13")
     st.caption("Una sola pantalla para saber qué pasó, qué cambió, qué publicó Olé, qué falta y qué conviene seguir.")
     render_cut_quality(data.get("control") or {})
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Temas del corte", len(rows))
-    c2.metric("Acciones pendientes", len(actions))
-    c3.metric("Hallazgos", len(findings), delta=f"{len(candidates)} candidato(s)")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Confirmados", len(confirmed_rows))
+    c2.metric("Probables", len(probable_rows))
+    c3.metric("Para verificar", len(candidate_audit))
+    c4.metric("Hallazgos", len(findings), delta=f"{len(candidates)} candidato(s)")
     ole_status = str((data.get("control") or {}).get("ole_cobertura_dia") or "").strip().lower()
     ole_pages = (data.get("control") or {}).get("ole_paginas_revisadas") or ""
     ole_metric_delta = f"{ole_updated_only} actualizada(s) · {ole_pages} pág." if ole_pages else f"{ole_updated_only} actualizada(s)"
-    c4.metric("Publicadas por Olé hoy", ole_published_today, delta=ole_metric_delta)
+    c5.metric("Publicadas por Olé hoy", ole_published_today, delta=ole_metric_delta)
+    st.caption(f"Acciones pendientes: {len(actions)}")
     if rows:
         st.info(f"Corte: {rows[0].get('Desde','')} a {rows[0].get('Hasta','')} · actualizado {rows[0].get('Generado','')}")
-    tabs = st.tabs(["Resumen 4H", "Acciones", "Olé hoy", "Hallazgos", "Fuentes", "Parte ampliado"])
+    tabs = st.tabs(["Resumen 4H", "Acciones", "Olé hoy", "Hallazgos", "Auditoría", "Fuentes", "Parte ampliado"])
     with tabs[0]:
         mode = st.radio("Lectura", ["2 minutos", "Completa"], horizontal=True)
         limit = 10 if mode == "2 minutos" else 40
-        for row in rows[:limit]:
-            render_summary_row(row)
+        shown = 0
+        if confirmed_rows:
+            st.subheader("Actualidad confirmada")
+            for row in confirmed_rows:
+                if shown >= limit:
+                    break
+                render_summary_row(row)
+                shown += 1
+        if probable_rows and shown < limit:
+            st.subheader("Actualidad probable")
+            st.caption("La hora proviene de un RSS o listado directo del medio; conviene abrir la fuente antes de publicar.")
+            for row in probable_rows:
+                if shown >= limit:
+                    break
+                render_summary_row(row)
+                shown += 1
+        if not rows:
+            st.info("No hubo temas confirmados o probables dentro de esta ventana. Revisá Auditoría para ver candidatos y exclusiones.")
         if store.url_planilla():
             st.link_button("Abrir la planilla", store.url_planilla())
     with tabs[1]:
@@ -737,8 +766,11 @@ def page_desk(data: dict) -> None:
         ole_detail = (
             f"{control.get('ole_paginas_revisadas','')} páginas revisadas · "
             f"{control.get('ole_notas_listado','')} piezas verificadas · "
-            f"{control.get('ole_sitemap_agregadas','0')} agregadas por sitemap"
+            f"{control.get('ole_sitemap_agregadas','0')} agregadas por sitemap · "
+            f"{control.get('ole_home_verificadas','0')} recuperadas desde la home"
         ).strip(" ·")
+        if control.get("ole_estrategia_paginacion"):
+            ole_detail += f" · paginación: {control.get('ole_estrategia_paginacion')}"
         ole_range = ""
         if control.get("ole_primera_nota_hoy") or control.get("ole_ultima_nota_hoy"):
             ole_range = f" · rango fechado: {control.get('ole_primera_nota_hoy','?')} a {control.get('ole_ultima_nota_hoy','?')}"
@@ -786,10 +818,24 @@ def page_desk(data: dict) -> None:
                 for idx, row in enumerate(candidates[:30]):
                     render_discovery(row, 8000 + idx, compact=True)
     with tabs[4]:
+        st.subheader("Por qué entra o queda afuera cada tema")
+        if not audit_rows:
+            st.info("La auditoría se completará en la próxima ejecución del monitor.")
+        else:
+            a1, a2 = st.columns(2)
+            status_filter = a1.multiselect(
+                "Estado de actualidad", ["CONFIRMADO", "PROBABLE", "CANDIDATO", "EXCLUIDO"],
+                default=["CANDIDATO", "EXCLUIDO"],
+            )
+            kind_filter = a2.multiselect("Tipo", sorted({row.get("Tipo", "") for row in audit_rows if row.get("Tipo")}))
+            filtered_audit = [row for row in audit_rows if (not status_filter or row.get("EstadoActualidad") in status_filter) and (not kind_filter or row.get("Tipo") in kind_filter)]
+            st.caption(f"{len(filtered_audit)} registros")
+            st.dataframe(filtered_audit[:300], use_container_width=True, hide_index=True)
+    with tabs[5]:
         broken = [row for row in source_rows if row.get("Estado") != "SALUDABLE"]
         st.metric("Fuentes que requieren atención", len(broken))
         st.dataframe(source_rows, use_container_width=True, hide_index=True)
-    with tabs[5]:
+    with tabs[6]:
         paid_report_block(data)
 
 
@@ -900,7 +946,7 @@ def page_config(data: dict) -> None:
 
 
 with st.sidebar:
-    st.header("Monitor V12")
+    st.header("Monitor V13")
     page = st.radio(
         "Ir a",
         ["Mesa editorial", "Buzón social", "Ahora técnico", "Asistente", "Explorar", "Producir", "Predictivo", "Configuracion"],

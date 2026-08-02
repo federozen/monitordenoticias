@@ -21,7 +21,7 @@ import monitor_core
 from monitor_core import (
     TODAS_FUENTES, fetch_fuente, calcular_tendencias,
     analizar_ole_vs_compecencia_safe, construir_agenda, normalizar_titulo,
-    fetch_cobertura_ole_gnews, fetch_ultimas_ole, get_ole_fetch_meta, coincide_cobertura,
+    fetch_cobertura_ole_gnews, fetch_ultimas_ole, enrich_ole_home_today, get_ole_fetch_meta, coincide_cobertura,
     calcular_momentum, es_tema_de_pases, ranking_entidades, dic_entidades,
 )
 import sheets_memoria as mem
@@ -148,7 +148,7 @@ def enviar_telegram(texto: str, html: bool = True, silencioso: bool = False) -> 
 def main():
     simulacro = not mem.disponible()
     legacy_memory = os.environ.get("LEGACY_MEMORY_WRITES_ENABLED", "false").strip().lower() in {"1", "true", "yes", "si"}
-    print("=== MONITOR V12 - frescura verificable, Ole Hoy y hallazgos ===", "(modo simulacro: sin Sheet configurado)" if simulacro else "")
+    print("=== MONITOR V13 - resumen hibrido, auditoria y Ole Hoy ===", "(modo simulacro: sin Sheet configurado)" if simulacro else "")
     print(f"modo de convivencia: escrituras heredadas={'si' if legacy_memory else 'no'}")
 
     # El workflow puede disparar esta corrida cada 20 min (como respaldo por si
@@ -215,15 +215,19 @@ def main():
         # persistir lo publicado por Olé en su pestaña, por tres vías:
         # portada (lo destacado) + /ultimas-noticias (TODO, al minuto) + Google News (respaldo)
         portada = [{**item, "ole_origin": "portada"} for item in resultados.get("ole", [])]
-        ultimas = [{**item, "ole_origin": "ultimas"} for item in fetch_ultimas_ole()]
+        ultimas = [{**item, "ole_origin": item.get("ole_origin") or "ultimas"} for item in fetch_ultimas_ole()]
+        portada_hoy = enrich_ole_home_today(
+            portada, existing_urls={str(item.get("url") or "") for item in ultimas}
+        )
         ole_fetch_meta = get_ole_fetch_meta()
         gnews_ole = [{**item, "ole_origin": "gnews"} for item in fetch_cobertura_ole_gnews()]
-        # OLE_HOY usa solo el flujo cronologico y el respaldo fechado. La
-        # portada y la memoria de cinco dias siguen sirviendo para comparar
-        # cobertura, pero no deben contaminar la vista "hoy".
-        ole_today_items = ultimas + gnews_ole
-        print(f"   cobertura Olé: portada {len(portada)} · últimas {len(ultimas)} · gnews {len(gnews_ole)} · "
-              f"páginas {ole_fetch_meta.get('pages', 0)} · estado {ole_fetch_meta.get('status', '')}")
+        # Últimas Noticias es la base; la home aporta solo piezas cuya fecha se
+        # verificó abriendo la nota. Google News sirve para comparar cobertura,
+        # no para contar publicaciones del día.
+        ole_today_items = ultimas + portada_hoy + gnews_ole
+        print(f"   cobertura Olé: portada {len(portada)} ({len(portada_hoy)} verificadas hoy) · "
+              f"últimas {len(ultimas)} · gnews {len(gnews_ole)} · páginas {ole_fetch_meta.get('pages', 0)} · "
+              f"estado {ole_fetch_meta.get('status', '')} · estrategia {ole_fetch_meta.get('pagination_strategy', '')}")
         if legacy_memory:
             nuevas_ole = mem.registrar_cobertura_ole(portada + ultimas + gnews_ole)
         # La memoria se lee para aprovechar el proyecto actual, pero durante la
@@ -340,6 +344,9 @@ def main():
                     "ole_notas_hoy_fechadas": ole_fetch_meta.get("today_items", 0),
                     "ole_notas_actualizadas_hoy": ole_fetch_meta.get("updated_today_items", 0),
                     "ole_sitemap_agregadas": ole_fetch_meta.get("sitemap_added", 0),
+                    "ole_home_verificadas": ole_fetch_meta.get("home_verified_added", 0),
+                    "ole_estrategia_paginacion": ole_fetch_meta.get("pagination_strategy", ""),
+                    "ole_urls_paginacion_probadas": ole_fetch_meta.get("attempted_url_count", 0),
                     "ole_sitemap_encontradas": ole_fetch_meta.get("sitemap_items", 0),
                     "ole_primera_nota_hoy": ole_fetch_meta.get("earliest_today", ""),
                     "ole_ultima_nota_hoy": ole_fetch_meta.get("latest_today", ""),
@@ -356,7 +363,7 @@ def main():
         except Exception as exc:
             print(f"   snapshot online fallo: {exc}")
 
-    # Capa V12: resumen 4H, memoria de Ole, acciones y hallazgos.
+    # Capa V13: resumen 4H, memoria de Ole, acciones y hallazgos.
     # e informe ejecutivo. No publica: recomienda, alerta y registra feedback.
     agent_result = {"enabled": False}
     if not simulacro and online.disponible():
@@ -373,9 +380,13 @@ def main():
                 discoveries_log = agent_result.get('discoveries', [])
                 hallazgos_log = sum(1 for item in discoveries_log if item.get('status') in {'HALLAZGO FUERTE', 'HALLAZGO'})
                 candidatos_log = sum(1 for item in discoveries_log if item.get('status') == 'CANDIDATO')
+                desk_meta = (agent_result.get('editorial_desk') or {}).get('meta', {})
                 print("   asistente: "
                       f"{len(agent_result.get('changes', []))} cambios · "
-                      f"{hallazgos_log} hallazgos · {candidatos_log} candidatos · "
+                      f"{desk_meta.get('confirmed_count', 0)} confirmados · "
+                      f"{desk_meta.get('probable_count', 0)} probables · "
+                      f"{desk_meta.get('candidate_count', 0)} para verificar · "
+                      f"{hallazgos_log} hallazgos · {candidatos_log} candidatos de hallazgo · "
                       f"{len(agent_result.get('opportunities', []))} oportunidades · "
                       f"{len((agent_result.get('editorial_desk') or {}).get('topics', []))} temas en resumen 4H · "
                       f"calidad {quality.get('state')} · "
