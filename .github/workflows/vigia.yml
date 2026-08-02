@@ -1,4 +1,4 @@
-name: Monitor V11 - mesa editorial
+name: Monitor V12 - mesa editorial confiable
 
 on:
   schedule:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: monitor-editorial-v11
+  group: monitor-editorial-v12
   cancel-in-progress: false
 
 jobs:
@@ -38,10 +38,12 @@ jobs:
           SCRAPE_MAX_WORKERS: ${{ vars.SCRAPE_MAX_WORKERS || '5' }}
           GNEWS_MIN_INTERVAL_SECONDS: ${{ vars.GNEWS_MIN_INTERVAL_SECONDS || '0.45' }}
           GNEWS_RETRY_ATTEMPTS: ${{ vars.GNEWS_RETRY_ATTEMPTS || '2' }}
-          OLE_MAX_PAGES: ${{ vars.OLE_MAX_PAGES || '8' }}
-          OLE_DETAIL_DATE_LIMIT: ${{ vars.OLE_DETAIL_DATE_LIMIT || '35' }}
+          STALE_DATE_VERIFY_LIMIT: ${{ vars.STALE_DATE_VERIFY_LIMIT || '8' }}
+          OLE_OLD_STREAK_REQUIRED: ${{ vars.OLE_OLD_STREAK_REQUIRED || '6' }}
+          OLE_MAX_PAGES: ${{ vars.OLE_MAX_PAGES || '20' }}
+          OLE_DETAIL_DATE_LIMIT: ${{ vars.OLE_DETAIL_DATE_LIMIT || '180' }}
           DISCOVERY_MAX_AGE_HOURS: ${{ vars.DISCOVERY_MAX_AGE_HOURS || '12' }}
-          DISCOVERY_MIN_SCORE: ${{ vars.DISCOVERY_MIN_SCORE || '58' }}
+          DISCOVERY_MIN_SCORE: ${{ vars.DISCOVERY_MIN_SCORE || '62' }}
           TELEGRAM_MODE: ${{ vars.TELEGRAM_MODE || 'off' }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
