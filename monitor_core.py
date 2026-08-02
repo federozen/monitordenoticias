@@ -1415,7 +1415,7 @@ def _extraer_imagen_rss_item(item_raw: str) -> str:
 
     return ""
 
-CORE_VERSION = "núcleo v26 · publishers reales + snapshots online"
+CORE_VERSION = "núcleo v27 · doble radar + cobertura Ole + hallazgos"
 MAX_ANTIGUEDAD_HORAS = int(os.environ.get("MAX_ANTIGUEDAD_HORAS", "18") or 18)  # ventana editorial configurable
 
 

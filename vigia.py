@@ -132,7 +132,7 @@ def enviar_telegram(texto: str, html: bool = True, silencioso: bool = False) -> 
 def main():
     simulacro = not mem.disponible()
     legacy_memory = os.environ.get("LEGACY_MEMORY_WRITES_ENABLED", "false").strip().lower() in {"1", "true", "yes", "si"}
-    print("=== MONITOR V9 - asistente editorial proactivo ===", "(modo simulacro: sin Sheet configurado)" if simulacro else "")
+    print("=== MONITOR V9.2 - doble radar editorial ===", "(modo simulacro: sin Sheet configurado)" if simulacro else "")
     print(f"modo de convivencia: escrituras heredadas={'si' if legacy_memory else 'no'}")
 
     # El workflow puede disparar esta corrida cada 20 min (como respaldo por si
@@ -186,7 +186,7 @@ def main():
         except Exception:
             prev = []
     monitor_core.CRITERIOS_EDITOR = cfg.get("criterios", "")
-    cubiertos, nuevas_ole = [], []
+    cubiertos, nuevas_ole, ole_coverage = [], [], []
     if not simulacro:
         # persistir lo publicado por Olé en su pestaña, por tres vías:
         # portada (lo destacado) + /ultimas-noticias (TODO, al minuto) + Google News (respaldo)
@@ -202,6 +202,7 @@ def main():
             cubiertos = mem.cobertura_propia(dias=5) + mem.titulos_cobertura_ole(dias=5)
         except Exception:
             cubiertos = []
+        ole_coverage = portada + ultimas + gnews_ole + cubiertos
     print(f"   {len(tendencias)} clusters · snapshot anterior: {len(prev)} temas · "
           f"memoria de cobertura propia: {len(cubiertos)} temas")
 
@@ -297,10 +298,12 @@ def main():
             agent_result = agent_orchestrator.run(
                 tendencias, agenda, estados_fuentes, online,
                 send_telegram=enviar_telegram, config=cfg,
+                raw_results=resultados, ole_coverage=ole_coverage,
             )
             if agent_result.get("enabled"):
                 print("   asistente: "
                       f"{len(agent_result.get('recommendations', []))} recomendaciones · "
+                      f"{len(agent_result.get('discoveries', []))} hallazgos · "
                       f"{len(agent_result.get('opportunities', []))} oportunidades · "
                       f"{agent_result.get('alerts_sent', 0)} alertas")
         except Exception as exc:

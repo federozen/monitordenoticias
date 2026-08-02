@@ -41,9 +41,14 @@ FEEDBACK_HEADERS = [
     "Util", "TerminoEnNota", "Comentario",
 ]
 RECOMENDACIONES_HEADERS = [
-    "RunTS", "RecommendationID", "ClusterID", "Prioridad", "Confianza", "Estado",
-    "Accion", "Titulo", "URL", "Medios", "Publishers", "TieneOle", "Momentum",
-    "EsNuevo", "FuentesOficiales", "Motivo", "EvidenciaJSON",
+    "RunTS", "RecommendationID", "ClusterID", "Radar", "Prioridad", "Confianza", "Estado",
+    "Accion", "CoberturaOle", "TituloOle", "URLOle", "Titulo", "URL", "Medios",
+    "Publishers", "TieneOle", "Momentum", "EsNuevo", "FuentesOficiales", "Motivo", "EvidenciaJSON",
+]
+DESCUBRIMIENTOS_HEADERS = [
+    "RunTS", "DiscoveryID", "Categoria", "Score", "ValorArgentina", "Titulo", "URL",
+    "Publishers", "Medios", "FechaPublicacion", "AntiguedadHoras", "EsNuevo",
+    "EstadoOle", "TituloOle", "URLOle", "Motivo", "Angulo", "Formato", "EvidenciaJSON",
 ]
 OPORTUNIDADES_HEADERS = [
     "RunTS", "OpportunityID", "Score", "Formato", "Titulo", "TemaOrigen",
@@ -122,6 +127,7 @@ def asegurar_estructura() -> None:
     _ws("Control", CONTROL_HEADERS, rows=40)
     _ws("Feedback", FEEDBACK_HEADERS, rows=500)
     _ws("Recomendaciones", RECOMENDACIONES_HEADERS, rows=300)
+    _ws("Descubrimientos", DESCUBRIMIENTOS_HEADERS, rows=200)
     _ws("Oportunidades", OPORTUNIDADES_HEADERS, rows=200)
     _ws("Informes", INFORMES_HEADERS, rows=500)
     _ws("Avisos", AVISOS_HEADERS, rows=1000)
@@ -307,20 +313,45 @@ def leer_feedback() -> list[dict]:
     return _records("Feedback", FEEDBACK_HEADERS)
 
 
+def leer_descubrimientos() -> list[dict]:
+    rows = _records("Descubrimientos", DESCUBRIMIENTOS_HEADERS)
+    for row in rows:
+        try:
+            row["Evidencia"] = json.loads(row.get("EvidenciaJSON") or "[]")
+        except Exception:
+            row["Evidencia"] = []
+    return rows
 
-def guardar_agente_snapshot(recommendations: list[dict], opportunities: list[dict]) -> dict:
-    """Replaces the current agent output while preserving reports and decisions."""
+
+
+def guardar_agente_snapshot(recommendations: list[dict], discoveries: list[dict], opportunities: list[dict]) -> dict:
+    """Replaces current outputs for the operational and discovery radars."""
     asegurar_estructura()
     now = datetime.now(_TZ_AR).isoformat(timespec="seconds")
     rec_rows = []
     for rec in recommendations:
         rec_rows.append([
             now, rec.get("recommendation_id", ""), rec.get("cluster_id", ""),
-            rec.get("priority", 0), rec.get("confidence", 0), rec.get("state", ""),
-            rec.get("action", ""), rec.get("title", ""), rec.get("url", ""),
+            rec.get("radar", "OPERATIVO LOCAL"), rec.get("priority", 0),
+            rec.get("confidence", 0), rec.get("state", ""), rec.get("action", ""),
+            rec.get("coverage_status", ""), rec.get("ole_match_title", ""),
+            rec.get("ole_match_url", ""), rec.get("title", ""), rec.get("url", ""),
             rec.get("media_count", 0), " | ".join(rec.get("publishers", []) or []),
             rec.get("has_ole", False), rec.get("momentum", 0), rec.get("is_new", False),
             rec.get("official_count", 0), rec.get("reason", ""), rec.get("evidence", []),
+        ])
+    discovery_rows = []
+    for item in discoveries:
+        discovery_rows.append([
+            now, item.get("discovery_id", ""), item.get("category", ""),
+            item.get("score", 0), item.get("value_argentina", 0), item.get("title", ""),
+            item.get("url", ""), " | ".join(item.get("publishers", []) or []),
+            item.get("media_count", 0), item.get("published_at", ""),
+            item.get("age_hours", ""), item.get("is_new", False),
+            item.get("ole_status", ""), item.get("ole_match_title", ""),
+            item.get("ole_match_url", ""), item.get("reason", ""),
+            item.get("suggested_angle", ""), item.get("suggested_format", ""),
+            item.get("evidence", []),
         ])
     opp_rows = []
     for opp in opportunities:
@@ -333,6 +364,7 @@ def guardar_agente_snapshot(recommendations: list[dict], opportunities: list[dic
         ])
     return {
         "recommendations": _replace("Recomendaciones", RECOMENDACIONES_HEADERS, rec_rows, 300),
+        "discoveries": _replace("Descubrimientos", DESCUBRIMIENTOS_HEADERS, discovery_rows, 200),
         "opportunities": _replace("Oportunidades", OPORTUNIDADES_HEADERS, opp_rows, 200),
     }
 
@@ -349,6 +381,15 @@ def _append(base: str, headers: list[str], row: list[Any], max_rows: int = 1500)
         return True
     except Exception:
         return False
+
+
+def registrar_avisos_descubrimiento(items: list[dict]) -> bool:
+    ok = True
+    for item in items or []:
+        ok = registrar_aviso_clave(
+            item.get("discovery_id", ""), "DISCOVERY", item.get("title", "")
+        ) and ok
+    return ok
 
 
 def registrar_informe(report: dict) -> bool:

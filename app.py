@@ -21,7 +21,7 @@ import sheets_memoria
 TZ_AR = timezone(timedelta(hours=-3))
 
 st.set_page_config(
-    page_title="Monitor Deportivo V9",
+    page_title="Monitor Deportivo V9.2",
     page_icon="MD",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -55,6 +55,7 @@ def load_data() -> dict:
         "sources": store.leer_fuentes(),
         "control": store.leer_control(),
         "recommendations": store.leer_recomendaciones(),
+        "discoveries": store.leer_descubrimientos(),
         "opportunities": store.leer_oportunidades(),
         "reports": store.leer_informes(20),
         "agent_log": store.leer_agent_log(50),
@@ -164,11 +165,18 @@ def render_recommendation(row: dict, idx: int, compact: bool = False) -> None:
                 unsafe_allow_html=True,
             )
             st.caption(
-                f"{action} | prioridad {priority}/100 | confianza {confidence}% | "
-                f"{row.get('Medios','0')} medios originales | estado: {row.get('Estado','')}"
+                f"{row.get('Radar','OPERATIVO LOCAL')} | {action} | prioridad {priority}/100 | "
+                f"confianza {confidence}% | {row.get('Medios','0')} medios | "
+                f"cobertura: {row.get('CoberturaOle','')}"
             )
             if row.get("Motivo"):
                 st.write(row.get("Motivo"))
+            if row.get("TituloOle"):
+                st.markdown(
+                    "**Coincidencia detectada en Ole:** " +
+                    title_link(row.get("TituloOle", ""), row.get("URLOle", "")),
+                    unsafe_allow_html=True,
+                )
         with right:
             feedback_widget(
                 row.get("ClusterID", ""), row.get("Titulo", ""), action,
@@ -182,6 +190,58 @@ def render_recommendation(row: dict, idx: int, compact: bool = False) -> None:
                         publisher = item.get("publisher") or item.get("configured_source") or "Fuente"
                         st.markdown(
                             f"- **{html.escape(str(publisher))}:** "
+                            f"{title_link(item.get('title',''), item.get('url',''))}",
+                            unsafe_allow_html=True,
+                        )
+
+
+def evidence_from_discovery(row: dict) -> list[dict]:
+    evidence = row.get("Evidencia")
+    if isinstance(evidence, list):
+        return evidence
+    try:
+        return json.loads(row.get("EvidenciaJSON") or "[]")
+    except Exception:
+        return []
+
+
+def render_discovery(row: dict, idx: int, compact: bool = False) -> None:
+    with st.container(border=True):
+        left, right = st.columns([5.2, 1.2])
+        with left:
+            st.markdown(
+                f"### {title_link(row.get('Titulo',''), row.get('URL',''))}",
+                unsafe_allow_html=True,
+            )
+            st.caption(
+                f"{row.get('Categoria','HALLAZGO')} | score {row.get('Score','0')}/100 | "
+                f"valor Argentina {row.get('ValorArgentina','0')}/100 | "
+                f"{row.get('Medios','0')} publishers"
+            )
+            if row.get("Motivo"):
+                st.write(row.get("Motivo"))
+            if row.get("Angulo"):
+                st.write(f"**Enfoque sugerido:** {row.get('Angulo')}")
+            if row.get("Formato"):
+                st.write(f"**Formato:** {row.get('Formato')}")
+            if row.get("TituloOle"):
+                st.markdown(
+                    "**Posible coincidencia en Ole:** " +
+                    title_link(row.get("TituloOle", ""), row.get("URLOle", "")),
+                    unsafe_allow_html=True,
+                )
+        with right:
+            feedback_widget(
+                row.get("DiscoveryID", ""), row.get("Titulo", ""), "HALLAZGO",
+                f"disc_{idx}_{row.get('DiscoveryID','')}",
+            )
+        if not compact:
+            evidence = evidence_from_discovery(row)
+            if evidence:
+                with st.expander(f"Ver fuentes ({len(evidence)})"):
+                    for item in evidence:
+                        st.markdown(
+                            f"- **{html.escape(str(item.get('publisher') or item.get('source_name') or 'Fuente'))}:** "
                             f"{title_link(item.get('title',''), item.get('url',''))}",
                             unsafe_allow_html=True,
                         )
@@ -215,25 +275,38 @@ def render_theme(row: dict, idx: int) -> None:
 def page_now(data: dict) -> None:
     control = data["control"]
     recs = data["recommendations"]
+    discoveries = data["discoveries"]
     sources = data["sources"]
-    st.title("Monitor Deportivo y asistente editorial")
+    st.title("Monitor Deportivo V9.2")
+    st.caption("Dos radares: acciones operativas sobre la cobertura de Ole y hallazgos internacionales con mirada argentina.")
     last = control.get("ultima_actualizacion", "Sin datos")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Ultima actualizacion", last.replace("T", " ")[:19])
-    c2.metric("Noticias", control.get("noticias", "0"))
-    c3.metric("Recomendaciones", len(recs))
-    c4.metric("Fuentes activas", f"{control.get('fuentes_ok','0')}/{control.get('fuentes_total','0')}")
-
-    urgent = [
+    operational = [
         r for r in recs
         if as_int(r.get("Prioridad")) >= 60
         and r.get("Accion") in {"PUBLICAR AHORA", "ACTUALIZAR", "VERIFICAR"}
     ]
-    st.subheader("Que hacer ahora")
-    if not urgent:
-        st.info("No hay recomendaciones de prioridad alta en el ultimo corte.")
-    for idx, row in enumerate(urgent[:8]):
-        render_recommendation(row, idx, compact=True)
+    findings = [d for d in discoveries if as_int(d.get("Score")) >= 58]
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Ultima actualizacion", last.replace("T", " ")[:19])
+    c2.metric("Acciones operativas", len(operational))
+    c3.metric("Hallazgos", len(findings))
+    c4.metric("Fuentes activas", f"{control.get('fuentes_ok','0')}/{control.get('fuentes_total','0')}")
+
+    tab_local, tab_findings = st.tabs(["Radar operativo", "Descubrimiento"])
+    with tab_local:
+        st.subheader("Que cambio y requiere una accion")
+        if not operational:
+            st.info("No hay faltantes, actualizaciones o verificaciones de prioridad alta en este corte.")
+        for idx, row in enumerate(operational[:8]):
+            render_recommendation(row, idx, compact=True)
+
+    with tab_findings:
+        st.subheader("Historias raras o del exterior")
+        st.caption("Se priorizan rareza, potencial narrativo, conexion argentina y ausencia de una nota equivalente en Ole.")
+        if not findings:
+            st.info("No aparecieron hallazgos con suficiente valor editorial en este corte.")
+        for idx, row in enumerate(findings[:8]):
+            render_discovery(row, idx, compact=True)
 
     errors = [source for source in sources if source.get("Estado") != "ok"]
     with st.expander(f"Salud de fuentes: {len(errors)} con problemas"):
@@ -242,32 +315,35 @@ def page_now(data: dict) -> None:
         for source in errors:
             st.write(f"**{source.get('Fuente')}** - {source.get('Error') or 'sin noticias'}")
 
-
 def page_assistant(data: dict) -> None:
-    st.title("Asistente editorial proactivo")
+    st.title("Asistente editorial V9.2")
     recs = data["recommendations"]
+    discoveries = data["discoveries"]
     opportunities = data["opportunities"]
     reports = data["reports"]
 
-    tab_recs, tab_opps, tab_reports = st.tabs(["Recomendaciones", "Temas para hacer", "Informes"])
+    tab_recs, tab_disc, tab_opps, tab_reports = st.tabs([
+        "Acciones", "Hallazgos", "Ideas derivadas", "Informes"
+    ])
     with tab_recs:
-        st.info("Esta vista prioriza temas nuevos o que cambiaron desde el corte anterior. Los temas sin fecha o estables quedan para consulta, no como alerta.")
-        min_priority = st.slider("Prioridad minima", 0, 100, 60, 5)
-        actions = sorted({row.get("Accion", "") for row in recs if row.get("Accion")})
-        selected = st.multiselect("Acciones", actions)
-        filtered = [
-            row for row in recs
-            if as_int(row.get("Prioridad")) >= min_priority
-            and (not selected or row.get("Accion") in selected)
-        ]
-        st.caption(f"{len(filtered)} recomendaciones")
-        for idx, row in enumerate(filtered[:80]):
+        st.info("Solo propone publicar, actualizar o verificar cuando detecta una brecha o un dato nuevo respecto de la cobertura de Ole.")
+        min_priority = st.slider("Prioridad minima", 0, 100, 55, 5)
+        filtered = [r for r in recs if as_int(r.get("Prioridad")) >= min_priority]
+        st.caption(f"{len(filtered)} acciones")
+        for idx, row in enumerate(filtered[:60]):
             render_recommendation(row, 1000 + idx)
+
+    with tab_disc:
+        min_score = st.slider("Score minimo de descubrimiento", 0, 100, 55, 5)
+        filtered = [d for d in discoveries if as_int(d.get("Score")) >= min_score]
+        st.caption(f"{len(filtered)} hallazgos")
+        for idx, row in enumerate(filtered[:60]):
+            render_discovery(row, 2000 + idx)
 
     with tab_opps:
         if not opportunities:
-            st.info("Todavia no hay oportunidades generadas. Ejecuta el workflow V9 una vez.")
-        for idx, row in enumerate(opportunities):
+            st.info("No hay ideas derivadas en este corte.")
+        for row in opportunities:
             with st.container(border=True):
                 st.markdown(f"### {row.get('Titulo','')}")
                 st.caption(
@@ -285,7 +361,6 @@ def page_assistant(data: dict) -> None:
         for row in reversed(reports):
             with st.expander(f"{row.get('FechaHora','')} - {row.get('Titulo','Informe')}"):
                 st.text(row.get("Texto", ""))
-
 
 def page_explore(data: dict) -> None:
     themes = data["themes"]
@@ -317,17 +392,37 @@ def page_explore(data: dict) -> None:
 
 def page_produce(data: dict) -> None:
     themes = data["themes"]
+    discoveries = data["discoveries"]
     st.title("Producir")
-    options = {f"[{t.get('Accion','OBSERVAR')}] {t.get('Titulo','')}": t for t in themes}
-    selected_keys = st.multiselect("Elegi uno o mas temas", list(options.keys()), max_selections=5)
-    selected = [options[key] for key in selected_keys]
-    if selected:
-        st.subheader("Material verificado")
-        for row in selected:
+    st.caption("Podes trabajar sobre una accion local o convertir un hallazgo internacional en una historia con mirada argentina.")
+
+    theme_options = {f"[LOCAL · {t.get('Accion','OBSERVAR')}] {t.get('Titulo','')}": t for t in themes}
+    discovery_options = {f"[HALLAZGO · {d.get('Categoria','')}] {d.get('Titulo','')}": d for d in discoveries}
+    selected_theme_keys = st.multiselect(
+        "Acciones o temas locales", list(theme_options.keys()), max_selections=4
+    )
+    selected_discovery_keys = st.multiselect(
+        "Hallazgos del exterior", list(discovery_options.keys()), max_selections=4
+    )
+    selected_themes = [theme_options[key] for key in selected_theme_keys]
+    selected_discoveries = [discovery_options[key] for key in selected_discovery_keys]
+
+    if selected_themes or selected_discoveries:
+        st.subheader("Material disponible")
+        for row in selected_themes:
             st.markdown(f"**{row.get('Titulo')}**")
             for item in evidence_from_theme(row):
                 st.markdown(
                     f"- {item.get('fuente')}: {title_link(item.get('titulo',''), item.get('url',''))}",
+                    unsafe_allow_html=True,
+                )
+        for row in selected_discoveries:
+            st.markdown(f"**{row.get('Titulo')}**")
+            st.write(f"Enfoque sugerido: {row.get('Angulo','')}")
+            for item in evidence_from_discovery(row):
+                st.markdown(
+                    f"- {item.get('publisher') or item.get('source_name')}: "
+                    f"{title_link(item.get('title',''), item.get('url',''))}",
                     unsafe_allow_html=True,
                 )
 
@@ -336,19 +431,29 @@ def page_produce(data: dict) -> None:
         ["Brief editorial", "Angulos y titulos", "Resumen comparado", "Borrador de nota"],
     )
     instructions = st.text_area("Indicaciones adicionales", placeholder="Extension, foco o dato a verificar")
-    if st.button("Generar", type="primary", disabled=not selected):
+    has_selection = bool(selected_themes or selected_discoveries)
+    if st.button("Generar", type="primary", disabled=not has_selection):
         api_key = _secret("ANTHROPIC_API_KEY")
         if not api_key:
             st.error("Falta ANTHROPIC_API_KEY en los Secrets de Streamlit.")
         else:
             context = []
-            for row in selected:
+            for row in selected_themes:
                 context.append({
-                    "tema": row.get("Titulo"), "accion": row.get("Accion"),
-                    "motivo": row.get("Motivo"), "fuentes": evidence_from_theme(row),
+                    "tipo": "operativo local", "tema": row.get("Titulo"),
+                    "accion": row.get("Accion"), "motivo": row.get("Motivo"),
+                    "fuentes": evidence_from_theme(row),
+                })
+            for row in selected_discoveries:
+                context.append({
+                    "tipo": "hallazgo internacional", "tema": row.get("Titulo"),
+                    "categoria": row.get("Categoria"), "valor_argentina": row.get("ValorArgentina"),
+                    "motivo": row.get("Motivo"), "angulo_sugerido": row.get("Angulo"),
+                    "fuentes": evidence_from_discovery(row),
                 })
             prompt = f"""Sos editor deportivo de Ole. Prepara un {output_type.lower()} en espanol rioplatense.
 No inventes datos. Separa coincidencias, versiones y datos que requieren verificacion.
+Para los hallazgos internacionales, explica por que pueden interesar al lector deportivo promedio de Argentina y evita una traduccion plana.
 Indicaciones: {instructions or 'ninguna'}
 Material: {json.dumps(context, ensure_ascii=False)}"""
             with st.spinner("Analizando material..."):
@@ -359,7 +464,6 @@ Material: {json.dumps(context, ensure_ascii=False)}"""
                     st.markdown(text)
                 except Exception as exc:
                     st.error(str(exc))
-
 
 def page_predictive() -> None:
     st.title("Predictivo")
@@ -406,7 +510,7 @@ def page_config(data: dict) -> None:
     prefix = store.prefix()
     st.write(
         f"Pestanas V9: **{prefix}Noticias, {prefix}Temas, {prefix}Fuentes, "
-        f"{prefix}Recomendaciones, {prefix}Oportunidades, {prefix}Informes, "
+        f"{prefix}Recomendaciones, {prefix}Descubrimientos, {prefix}Oportunidades, {prefix}Informes, "
         f"{prefix}Avisos y {prefix}AgentLog**."
     )
     config = sheets_memoria.leer_config() if sheets_memoria.disponible() else {}
@@ -430,7 +534,7 @@ def page_config(data: dict) -> None:
 
 
 with st.sidebar:
-    st.header("Monitor V9")
+    st.header("Monitor V9.2")
     page = st.radio(
         "Ir a",
         ["Ahora", "Asistente", "Explorar", "Producir", "Predictivo", "Configuracion"],
