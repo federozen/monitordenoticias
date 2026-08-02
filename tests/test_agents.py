@@ -146,6 +146,30 @@ class V11DeskTests(unittest.TestCase):
         self.assertTrue(groups)
         self.assertTrue(all(item.get("topic_id") for item in entries))
 
+
+    def test_ole_today_handles_equal_similarity_scores(self):
+        from editorial_agents.ole_today import build_ole_today
+        items = [{
+            "titulo": "River confirmo una baja para el partido",
+            "url": "https://ole.test/river-baja",
+        }]
+        recs = [
+            {
+                "ole_match_title": "River confirmo una baja para el partido",
+                "title": "Actualizacion externa uno",
+                "action": "ACTUALIZAR",
+            },
+            {
+                "ole_match_title": "River confirmo una baja para el partido",
+                "title": "Actualizacion externa dos",
+                "action": "VERIFICAR",
+            },
+        ]
+        entries, groups = build_ole_today(items, [], recs)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(len(entries[0]["related_external"]), 2)
+        self.assertTrue(groups)
+
     def test_editorial_desk_builds_free_summary_and_actions(self):
         from editorial_agents.desk import build_editorial_desk
         now = datetime.now(timezone.utc)
