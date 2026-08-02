@@ -307,6 +307,30 @@ def render_change(row: dict, idx: int) -> None:
         )
 
 
+
+
+def render_cut_quality(control: dict) -> None:
+    state = str(control.get("calidad_corte") or "").upper()
+    if not state:
+        return
+    pct = control.get("cobertura_fuentes_pct") or ""
+    ok = control.get("fuentes_ok") or "0"
+    total = control.get("fuentes_total") or "0"
+    last_full = control.get("ultima_actualizacion_completa") or control.get("ultima_actualizacion_snapshot") or ""
+    detail = control.get("calidad_detalle") or ""
+    if state == "COMPLETO":
+        st.success(f"Corte completo: {ok}/{total} fuentes ({pct}%).")
+    elif state == "DEGRADADO":
+        message = f"Corte parcial: {ok}/{total} fuentes ({pct}%). Se conserva el ultimo panorama completo"
+        if last_full:
+            message += f" de {str(last_full).replace('T', ' ')[:19]}"
+        message += ". Las novedades visibles provienen de las fuentes que si respondieron."
+        st.warning(message)
+        if detail:
+            st.caption(detail)
+    else:
+        st.error(f"Corte critico: {ok}/{total} fuentes ({pct}%). El panorama anterior no fue reemplazado.")
+
 def page_now(data: dict) -> None:
     control = data["control"]
     summary = data.get("summary") or {}
@@ -314,8 +338,9 @@ def page_now(data: dict) -> None:
     discoveries = data["discoveries"]
     sources = data["sources"]
 
-    st.title("Monitor Deportivo V10")
+    st.title("Monitor Deportivo V11")
     st.caption("Un resumen del corte, los cambios concretos para agregar y un radar de hallazgos que evita navegar fuente por fuente.")
+    render_cut_quality(control)
     last = control.get("ultima_actualizacion", "Sin datos")
     actionable_changes = [
         row for row in changes
@@ -648,6 +673,7 @@ def page_desk(data: dict) -> None:
     source_rows = data.get("sources_editor") or []
     st.title("Mesa editorial V11")
     st.caption("Una sola pantalla para saber qué pasó, qué cambió, qué publicó Olé, qué falta y qué conviene seguir.")
+    render_cut_quality(data.get("control") or {})
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Temas del corte", len(rows))
     c2.metric("Acciones pendientes", len(actions))

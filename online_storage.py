@@ -269,8 +269,16 @@ def cluster_id(titulo: str) -> str:
 
 
 def guardar_snapshot_online(resultados: dict, tendencias: list, agenda: list,
-                            estados_fuentes: list, run_info: dict | None = None) -> dict:
-    """Reemplaza las pestanas operativas. No modifica Agenda/Snapshot historicos."""
+                            estados_fuentes: list, run_info: dict | None = None,
+                            preserve_previous: bool = False,
+                            quality_info: dict | None = None,
+                            previous_control: dict | None = None) -> dict:
+    """Update the online snapshot without letting a degraded cut erase good data.
+
+    When ``preserve_previous`` is true, Noticias and Temas stay on the last complete
+    panorama. Fuentes and Control are still refreshed so the editor can see the
+    current outage and the partial-cut metrics.
+    """
     asegurar_estructura()
     run_info = dict(run_info or {})
     now = datetime.now(_TZ_AR).isoformat(timespec="seconds")
@@ -334,18 +342,49 @@ def guardar_snapshot_online(resultados: dict, tendencias: list, agenda: list,
             s.get("duracion", 0), s.get("error", ""), s.get("ultimo_contenido", ""),
         ])
 
-    counts = {
-        "noticias": _replace("Noticias", NOTICIAS_HEADERS, news_rows, 1200),
-        "temas": _replace("Temas", TEMAS_HEADERS, temas_rows, 250),
-        "fuentes": _replace("Fuentes", FUENTES_HEADERS, source_rows, 150),
-    }
+    previous_control = dict(previous_control or {})
+    quality_info = dict(quality_info or {})
+    if preserve_previous:
+        counts = {
+            "noticias": len(leer_noticias()),
+            "temas": len(leer_temas()),
+            "fuentes": _replace("Fuentes", FUENTES_HEADERS, source_rows, 150),
+        }
+    else:
+        counts = {
+            "noticias": _replace("Noticias", NOTICIAS_HEADERS, news_rows, 1200),
+            "temas": _replace("Temas", TEMAS_HEADERS, temas_rows, 250),
+            "fuentes": _replace("Fuentes", FUENTES_HEADERS, source_rows, 150),
+        }
+
+    last_complete = now if not preserve_previous else (
+        previous_control.get("ultima_actualizacion_completa")
+        or previous_control.get("ultima_actualizacion_snapshot")
+        or previous_control.get("ultima_actualizacion")
+        or ""
+    )
+    current_ok = sum(1 for s in estados_fuentes if s.get("estado") == "ok")
     control = {
         "ultima_actualizacion": now,
-        "estado": run_info.pop("estado", "ok"),
+        "ultima_actualizacion_snapshot": last_complete,
+        "ultima_actualizacion_completa": last_complete,
+        "estado": run_info.pop("estado", "degradado" if preserve_previous else "ok"),
+        "calidad_corte": quality_info.get("state", "DEGRADADO" if preserve_previous else "COMPLETO"),
+        "calidad_detalle": quality_info.get("label", ""),
+        "cobertura_fuentes_pct": quality_info.get("coverage_pct", ""),
+        "snapshot_preservado": "si" if preserve_previous else "no",
         "noticias": counts["noticias"],
         "temas": counts["temas"],
-        "fuentes_ok": sum(1 for s in estados_fuentes if s.get("estado") == "ok"),
+        "noticias_corte": run_info.pop("noticias_corte", len(news_rows)),
+        "temas_corte": run_info.pop("temas_corte", len(temas_rows)),
+        "fuentes_ok": current_ok,
         "fuentes_total": len(estados_fuentes),
+        "fuentes_directas_ok": quality_info.get("direct_ok", ""),
+        "fuentes_directas_total": quality_info.get("direct_total", ""),
+        "fuentes_gnews_ok": quality_info.get("gnews_ok", ""),
+        "fuentes_gnews_total": quality_info.get("gnews_total", ""),
+        "errores_503": quality_info.get("errors_503", ""),
+        "errores_404": quality_info.get("errors_404", ""),
         **run_info,
     }
     _replace("Control", CONTROL_HEADERS,

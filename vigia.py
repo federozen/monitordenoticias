@@ -27,6 +27,7 @@ from monitor_core import (
 import sheets_memoria as mem
 import online_storage as online
 from editorial_agents import orchestrator as agent_orchestrator
+from editorial_agents import cut_quality
 
 
 def clave_tema(titulo: str) -> str:
@@ -46,7 +47,8 @@ def scrapear_todo() -> tuple[dict, list]:
     """Devuelve resultados y salud de cada fuente para el tablero online."""
     resultados, estados = {}, []
     nac_ids = set(getattr(monitor_core, "FUENTES_NAC_IDS", set()))
-    with ThreadPoolExecutor(max_workers=8) as ex:
+    max_workers = max(2, min(8, int(os.environ.get("SCRAPE_MAX_WORKERS", "5") or 5)))
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futs = {ex.submit(_fetch_timed, f): f for f in TODAS_FUENTES}
         for fut in as_completed(futs):
             f = futs[fut]
@@ -158,7 +160,14 @@ def main():
     total = sum(len(v) for v in resultados.values())
     fuentes_ok = sum(1 for v in resultados.values() if v)
     print(f"   {total} noticias de {fuentes_ok}/{len(TODAS_FUENTES)} fuentes")
-    if fuentes_ok < 5:
+    quality = cut_quality.assess(estados_fuentes)
+    print(f"   calidad del corte: {quality['state']} · {quality['coverage_pct']}% de fuentes "
+          f"({quality['sources_ok']}/{quality['sources_total']}) · "
+          f"directas {quality['direct_ok']}/{quality['direct_total']} · "
+          f"Google News {quality['gnews_ok']}/{quality['gnews_total']}")
+    if quality.get("preserve_previous"):
+        print("   corte parcial: se conservara el ultimo panorama completo y solo se agregaran novedades verificadas.")
+    if not quality.get("usable"):
         print("   Muy pocas fuentes respondieron; aborto para no ensuciar la memoria.")
         sys.exit(1)
 
@@ -275,11 +284,20 @@ def main():
     # Se conserva el corte anterior antes de reemplazar las pestanas operativas.
     # El resumen editorial se basa en diferencias reales, no en el inventario completo.
     previous_themes = []
+    previous_control = {}
     if not simulacro and online.disponible():
         try:
             previous_themes = online.leer_temas()
         except Exception:
             previous_themes = []
+        try:
+            previous_control = online.leer_control()
+        except Exception:
+            previous_control = {}
+    panorama_themes = (
+        cut_quality.merge_with_previous(tendencias, previous_themes, max_items=120)
+        if quality.get("preserve_previous") else tendencias
+    )
 
     # Snapshot para la app liviana. Usa pestanas nuevas (V9_ por defecto),
     # por lo que puede convivir con la planilla y el vigia anteriores.
@@ -288,14 +306,20 @@ def main():
             counts = online.guardar_snapshot_online(
                 resultados, tendencias, agenda, estados_fuentes,
                 run_info={
-                    "estado": "ok",
+                    "estado": "degradado" if quality.get("preserve_previous") else "ok",
                     "duracion_seg": round(time.perf_counter() - inicio_corrida, 2),
                     "version_nucleo": getattr(monitor_core, "CORE_VERSION", ""),
                     "telegram_mode": os.environ.get("TELEGRAM_MODE", "full"),
+                    "noticias_corte": total,
+                    "temas_corte": len(tendencias),
                 },
+                preserve_previous=quality.get("preserve_previous", False),
+                quality_info=quality,
+                previous_control=previous_control,
             )
+            suffix = " · panorama anterior preservado" if quality.get("preserve_previous") else ""
             print(f"   snapshot online: {counts['noticias']} noticias · "
-                  f"{counts['temas']} temas · {counts['fuentes']} fuentes")
+                  f"{counts['temas']} temas · {counts['fuentes']} fuentes{suffix}")
         except Exception as exc:
             print(f"   snapshot online fallo: {exc}")
 
@@ -309,6 +333,8 @@ def main():
                 send_telegram=enviar_telegram, config=cfg,
                 raw_results=resultados, ole_coverage=ole_coverage,
                 previous_themes=previous_themes,
+                panorama_themes=panorama_themes,
+                cut_quality=quality,
             )
             if agent_result.get("enabled"):
                 print("   asistente: "
@@ -316,6 +342,7 @@ def main():
                       f"{len(agent_result.get('discoveries', []))} hallazgos/candidatos · "
                       f"{len(agent_result.get('opportunities', []))} oportunidades · "
                       f"{len((agent_result.get('editorial_desk') or {}).get('topics', []))} temas en resumen 4H · "
+                      f"calidad {quality.get('state')} · "
                       f"{agent_result.get('alerts_sent', 0)} alertas")
         except Exception as exc:
             print(f"   asistente editorial fallo: {exc}")

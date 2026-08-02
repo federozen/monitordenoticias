@@ -5,6 +5,8 @@ import re
 import os
 import json
 import random
+import threading
+import time
 import unicodedata
 import requests
 import anthropic
@@ -482,7 +484,7 @@ def fetch_cobertura_ole_gnews() -> list:
     """Trae por Google News lo último publicado por Olé (más allá de su
     portada). Devuelve [{titulo, url}, ...]."""
     try:
-        resp = requests.get(_gnews_url("ole.com.ar", "ole"), headers=HEADERS, timeout=15)
+        resp = _gnews_get(_gnews_url("ole.com.ar", "ole"), timeout=15)
         resp.raise_for_status()
         return [{"titulo": _limpiar_titulo_gnews(n["titulo"]), "url": n.get("url") or ""}
                 for n in extraer_rss(resp.text)]
@@ -2122,6 +2124,33 @@ GNEWS_LOC = {
 }
 
 
+_GNEWS_LOCK = threading.Lock()
+_GNEWS_LAST_REQUEST = 0.0
+
+
+def _gnews_get(url: str, timeout: int = 15):
+    """Serialize Google News requests and retry temporary 429/503 responses.
+
+    A large concurrent burst frequently makes Google News return 503 for most
+    feeds. The lock keeps the rate predictable without slowing direct sources.
+    """
+    global _GNEWS_LAST_REQUEST
+    min_interval = max(0.0, float(os.environ.get("GNEWS_MIN_INTERVAL_SECONDS", "0.45") or 0.45))
+    attempts = max(1, int(os.environ.get("GNEWS_RETRY_ATTEMPTS", "2") or 2))
+    with _GNEWS_LOCK:
+        for attempt in range(attempts):
+            wait = min_interval - (time.monotonic() - _GNEWS_LAST_REQUEST)
+            if wait > 0:
+                time.sleep(wait)
+            resp = requests.get(url, headers=HEADERS, timeout=timeout)
+            _GNEWS_LAST_REQUEST = time.monotonic()
+            if resp.status_code not in {429, 503}:
+                return resp
+            if attempt < attempts - 1:
+                time.sleep(1.5 * (attempt + 1))
+        return resp
+
+
 def _gnews_url(dominio: str, fuente_id: str = "") -> str:
     hl, gl, ceid = GNEWS_LOC.get(fuente_id, ("es-419", "AR", "AR:es-419"))
     return (f"https://news.google.com/rss/search?q=site:{dominio}"
@@ -2152,7 +2181,7 @@ def _fallback_gnews(fuente: dict, motivo_original: str) -> dict:
     if not dominio or "news.google.com" in fuente.get("url", ""):
         return {"id": fuente["id"], "noticias": [], "error": motivo_original}
     try:
-        resp = requests.get(_gnews_url(dominio, fuente.get("id", "")), headers=HEADERS, timeout=15)
+        resp = _gnews_get(_gnews_url(dominio, fuente.get("id", "")), timeout=15)
         resp.raise_for_status()
         noticias = extraer_rss(resp.text)
         for n in noticias:
@@ -2167,7 +2196,10 @@ def _fallback_gnews(fuente: dict, motivo_original: str) -> dict:
 
 def fetch_fuente(fuente: dict) -> dict:
     try:
-        resp = requests.get(fuente["url"], headers=HEADERS, timeout=15)
+        if "news.google.com" in fuente.get("url", ""):
+            resp = _gnews_get(fuente["url"], timeout=15)
+        else:
+            resp = requests.get(fuente["url"], headers=HEADERS, timeout=15)
         resp.raise_for_status()
 
         # Fuentes RSS (feeds de Google News y similares): parser dedicado
