@@ -33,8 +33,9 @@ def _report_type(hour: int) -> str:
 def run(themes: list[dict], agenda: list[dict], source_health: list[dict], storage,
         send_telegram: Callable[..., bool] | None = None, config: dict | None = None,
         force: bool = False, raw_results: dict | None = None,
-        ole_coverage: list[dict] | None = None, previous_themes: list[dict] | None = None,
-        panorama_themes: list[dict] | None = None, cut_quality: dict | None = None) -> dict:
+        ole_coverage: list[dict] | None = None, ole_today_items: list[dict] | None = None,
+        previous_themes: list[dict] | None = None, panorama_themes: list[dict] | None = None,
+        cut_quality: dict | None = None) -> dict:
     start = time.perf_counter()
     enabled = env_bool("AGENT_ENABLED", False) or force
     if not enabled:
@@ -65,7 +66,7 @@ def run(themes: list[dict], agenda: list[dict], source_health: list[dict], stora
     # en cortes de cuatro horas. El parte narrativo pago se produce solo desde
     # Streamlit cuando el editor pulsa el boton correspondiente.
     previous_ole = storage.leer_ole_hoy() if hasattr(storage, "leer_ole_hoy") else []
-    ole_today, ole_groups = build_ole_today(ole_coverage or [], previous_ole, recommendations, now)
+    ole_today, ole_groups = build_ole_today(ole_today_items or [], previous_ole, recommendations, now)
     social_items = storage.leer_buzon_social() if hasattr(storage, "leer_buzon_social") else []
     desk_themes = enrich_themes(panorama_themes or themes, ole_coverage)
     editorial_desk = build_editorial_desk(

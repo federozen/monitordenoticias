@@ -4,7 +4,8 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
-from .utils import normalize_text, stable_id, unique_strings, now_ar
+from .utils import (explicit_date_in_text, normalize_text, now_ar, parse_datetime,
+                    stable_id, unique_strings)
 
 _GENERIC = {
     "partido", "equipo", "futbol", "club", "jugador", "tecnico", "liga", "copa",
@@ -84,6 +85,32 @@ def _first_seen_map(previous: list[dict] | None) -> dict[str, str]:
     return result
 
 
+
+
+def _belongs_to_today(item: dict, title: str, first_seen_value: str, now: datetime) -> bool:
+    """Filtra la vista editorial: OLE_HOY debe ser de hoy, no la memoria de cobertura."""
+    published = parse_datetime(item.get("fecha_publicacion") or item.get("fecha"))
+    updated = parse_datetime(item.get("fecha_actualizacion") or item.get("actualizado"))
+    explicit = explicit_date_in_text(title, now)
+
+    # Una fecha escrita en el titulo tiene prioridad para eliminar servicios viejos.
+    if explicit is not None and explicit.date() != now.date():
+        return False
+    if published is not None:
+        return published.date() == now.date()
+    if updated is not None:
+        return updated.date() == now.date()
+
+    # Las entradas de /ultimas-noticias sin metadata se aceptan solo cuando
+    # fueron detectadas hoy. Portada y memoria sin fecha no son prueba de que
+    # la nota haya sido publicada hoy.
+    origin = str(item.get("ole_origin") or item.get("origen_ole") or "").lower()
+    first_seen_dt = parse_datetime(first_seen_value)
+    if origin == "ultimas":
+        return first_seen_dt is None or first_seen_dt.date() == now.date()
+    return False
+
+
 def build_ole_today(ole_items: list[dict] | None, previous: list[dict] | None = None,
                     recommendations: list[dict] | None = None,
                     now: datetime | None = None) -> tuple[list[dict], list[dict]]:
@@ -113,6 +140,9 @@ def build_ole_today(ole_items: list[dict] | None, previous: list[dict] | None = 
         key = url or normalize_text(title)
         if not key or key in seen:
             continue
+        first_seen_value = first_seen.get(key, now_iso)
+        if not _belongs_to_today(item, title, first_seen_value, now):
+            continue
         seen.add(key)
         related = list(recommendation_by_ole_url.get(url, []))
         if not related:
@@ -126,7 +156,7 @@ def build_ole_today(ole_items: list[dict] | None, previous: list[dict] | None = 
         external = unique_strings([str(rec.get("title") or "") for rec in related if rec.get("title")])
         entries.append({
             "ole_id": stable_id(key, "ole"),
-            "first_seen": first_seen.get(key, now_iso),
+            "first_seen": first_seen_value,
             "last_seen": now_iso,
             "published_at": str(item.get("fecha_publicacion") or item.get("fecha") or ""),
             "updated_at": str(item.get("fecha_actualizacion") or item.get("actualizado") or ""),

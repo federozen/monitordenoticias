@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from .utils import normalize_text, stable_id, unique_strings, now_ar
+from .utils import (explicit_date_in_text, normalize_text, now_ar, parse_datetime,
+                    stable_id, unique_strings)
 
 _ACTIONABLE = {"PUBLICAR AHORA", "ACTUALIZAR", "VERIFICAR", "PROFUNDIZAR", "SEGUIR"}
 _OTHER_SPORTS = (
@@ -80,6 +81,53 @@ def _evidence_from_theme(row: dict) -> list[dict]:
         })
     return out
 
+
+
+
+def _activity_dates(row: dict) -> list[datetime]:
+    dates: list[datetime] = []
+    for item in _evidence_from_theme(row):
+        dt = parse_datetime(item.get("published_at"))
+        if dt:
+            dates.append(dt)
+    for key in ("published_at", "FechaPublicacion", "fecha_publicacion", "updated_at", "FechaActualizacion"):
+        dt = parse_datetime(row.get(key))
+        if dt:
+            dates.append(dt)
+    return dates
+
+
+def _is_in_cut(row: dict, change: dict | None, start: datetime, now: datetime) -> tuple[bool, str]:
+    """Decide si un tema pertenece realmente al corte de cuatro horas.
+
+    No alcanza con que siga en una portada. Se exige una publicacion fechada
+    dentro de la ventana o una deteccion genuinamente nueva sin fecha.
+    """
+    title = _title(row)
+    explicit = explicit_date_in_text(title, now)
+    if explicit is not None and explicit.date() < start.date():
+        return False, "FECHA EXPLICITA ANTERIOR"
+
+    dates = _activity_dates(row)
+    if dates:
+        latest = max(dates)
+        return (start <= latest <= now + timedelta(minutes=10), "FECHA EN VENTANA" if start <= latest <= now + timedelta(minutes=10) else "FUERA DE VENTANA")
+
+    change_type = str((change or {}).get("change_type") or (change or {}).get("TipoCambio") or "").upper()
+    is_new = change_type.startswith("NUEVO") or str(row.get("nuevo") or row.get("Nuevo") or "").strip().lower() in {"true", "si", "sí", "1"}
+    if is_new and not row.get("_carried_from_previous"):
+        return True, "NUEVO SIN FECHA VERIFICABLE"
+    return False, "SIN FECHA NI NOVEDAD"
+
+
+def _discovery_in_cut(discovery: dict, start: datetime, now: datetime) -> bool:
+    explicit = explicit_date_in_text(_title(discovery), now)
+    if explicit is not None and explicit.date() < start.date():
+        return False
+    dt = parse_datetime(discovery.get("published_at") or discovery.get("FechaPublicacion"))
+    if dt:
+        return start <= dt <= now + timedelta(minutes=10)
+    return str(discovery.get("is_new") or discovery.get("EsNuevo") or "").strip().lower() in {"true", "si", "sí", "1"}
 
 def _source_line(evidence: list[dict], max_items: int = 5) -> tuple[str, str]:
     publishers = unique_strings([str(item.get("publisher") or "") for item in evidence if item.get("publisher")])[:max_items]
@@ -187,8 +235,22 @@ def build_editorial_desk(themes: list[dict], changes: list[dict], recommendation
     theme_map = {_cluster(theme): theme for theme in themes or []}
     selected: list[dict] = []
 
-    # 1. Real changes and actionable items first.
-    change_order = sorted(changes or [], key=lambda item: -_int(item.get("priority") or item.get("Prioridad") or 0))
+    eligible_theme_ids: set[str] = set()
+    exclusion_reasons: dict[str, str] = {}
+    for theme in themes or []:
+        cid = _cluster(theme)
+        eligible, reason = _is_in_cut(theme, change_map.get(cid), start, now)
+        if eligible:
+            eligible_theme_ids.add(cid)
+        else:
+            exclusion_reasons[cid] = reason
+
+    # 1. Real changes and actionable items first, but only if the underlying
+    # story had activity inside this four-hour window.
+    change_order = sorted(
+        [item for item in (changes or []) if _cluster(item) in eligible_theme_ids],
+        key=lambda item: -_int(item.get("priority") or item.get("Prioridad") or 0),
+    )
     for change in change_order:
         cid = _cluster(change)
         row = theme_map.get(cid) or change
@@ -200,7 +262,10 @@ def build_editorial_desk(themes: list[dict], changes: list[dict], recommendation
 
     # 2. Recommendations that did not produce a delta.
     if len(selected) < max_topics:
-        rec_order = sorted(recommendations or [], key=lambda item: -_int(item.get("priority") or item.get("Prioridad") or 0))
+        rec_order = sorted(
+            [item for item in (recommendations or []) if _cluster(item) in eligible_theme_ids],
+            key=lambda item: -_int(item.get("priority") or item.get("Prioridad") or 0),
+        )
         for rec in rec_order:
             cid = _cluster(rec)
             row = theme_map.get(cid) or rec
@@ -214,6 +279,8 @@ def build_editorial_desk(themes: list[dict], changes: list[dict], recommendation
     for discovery in discoveries or []:
         if len(selected) >= max_topics:
             break
+        if not _discovery_in_cut(discovery, start, now):
+            continue
         title = _title(discovery)
         if not title or _is_duplicate(title, selected):
             continue
@@ -268,10 +335,14 @@ def build_editorial_desk(themes: list[dict], changes: list[dict], recommendation
         })
 
 
-    # 5. Fill the panorama up to the requested size.
+    # 5. Completa solo con temas que pertenecen realmente a la ventana.
+    # Si hubo menos de 30 asuntos, se muestran menos: no se rellena con notas
+    # viejas para alcanzar una cuota artificial.
     for pos, theme in enumerate(themes or [], start=1):
         if len(selected) >= max_topics:
             break
+        if _cluster(theme) not in eligible_theme_ids:
+            continue
         title = _title(theme)
         if not title or _is_duplicate(title, selected):
             continue
@@ -329,5 +400,6 @@ def build_editorial_desk(themes: list[dict], changes: list[dict], recommendation
         "source_coverage_pct": (cut_quality or {}).get("coverage_pct", 100),
         "snapshot_preserved": bool((cut_quality or {}).get("preserve_previous")),
         "carried_topic_count": sum(1 for item in selected if item.get("origin") == "PANORAMA PREVIO"),
+        "excluded_outside_window": len(exclusion_reasons),
     }
     return {"topics": selected, "actions": actions, "meta": meta}
