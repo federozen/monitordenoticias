@@ -148,7 +148,9 @@ def _build_topic(row: dict, rec: dict | None, change: dict | None, order_hint: i
     sources, source_urls = _source_line(evidence)
     change_text = str((change or {}).get("what_changed") or (change or {}).get("QueCambio") or "").strip()
     if not change_text:
-        if str(row.get("nuevo") or row.get("Nuevo") or "").lower() in {"true", "si", "1"}:
+        if row.get("_carried_from_previous"):
+            change_text = "Se conserva del ultimo panorama completo; la fuente no estuvo disponible en este corte parcial."
+        elif str(row.get("nuevo") or row.get("Nuevo") or "").lower() in {"true", "si", "1"}:
             change_text = "Ingresó en este corte."
         else:
             change_text = "Se mantiene entre los temas relevantes del período."
@@ -169,14 +171,15 @@ def _build_topic(row: dict, rec: dict | None, change: dict | None, order_hint: i
         "sources": sources,
         "source_urls": source_urls,
         "url": _url(row),
-        "origin": "PANORAMA",
+        "origin": "PANORAMA PREVIO" if row.get("_carried_from_previous") else "PANORAMA",
     }
 
 
 def build_editorial_desk(themes: list[dict], changes: list[dict], recommendations: list[dict],
                          discoveries: list[dict], source_health: list[dict],
                          social_items: list[dict] | None = None, now: datetime | None = None,
-                         min_topics: int = 30, max_topics: int = 40) -> dict:
+                         min_topics: int = 30, max_topics: int = 40,
+                         cut_quality: dict | None = None) -> dict:
     now = now or now_ar()
     start, end, cut_key = _cut_window(now)
     rec_map = {_cluster(rec): rec for rec in recommendations or []}
@@ -321,5 +324,10 @@ def build_editorial_desk(themes: list[dict], changes: list[dict], recommendation
         "social_count": sum(1 for item in selected if item["section"] == "BUZON SOCIAL"),
         "broken_source_count": len(broken),
         "minimum_target": min_topics,
+        "cut_quality": str((cut_quality or {}).get("state") or "COMPLETO"),
+        "cut_quality_label": str((cut_quality or {}).get("label") or ""),
+        "source_coverage_pct": (cut_quality or {}).get("coverage_pct", 100),
+        "snapshot_preserved": bool((cut_quality or {}).get("preserve_previous")),
+        "carried_topic_count": sum(1 for item in selected if item.get("origin") == "PANORAMA PREVIO"),
     }
     return {"topics": selected, "actions": actions, "meta": meta}

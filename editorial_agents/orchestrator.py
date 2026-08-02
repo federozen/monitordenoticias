@@ -33,7 +33,8 @@ def _report_type(hour: int) -> str:
 def run(themes: list[dict], agenda: list[dict], source_health: list[dict], storage,
         send_telegram: Callable[..., bool] | None = None, config: dict | None = None,
         force: bool = False, raw_results: dict | None = None,
-        ole_coverage: list[dict] | None = None, previous_themes: list[dict] | None = None) -> dict:
+        ole_coverage: list[dict] | None = None, previous_themes: list[dict] | None = None,
+        panorama_themes: list[dict] | None = None, cut_quality: dict | None = None) -> dict:
     start = time.perf_counter()
     enabled = env_bool("AGENT_ENABLED", False) or force
     if not enabled:
@@ -66,11 +67,13 @@ def run(themes: list[dict], agenda: list[dict], source_health: list[dict], stora
     previous_ole = storage.leer_ole_hoy() if hasattr(storage, "leer_ole_hoy") else []
     ole_today, ole_groups = build_ole_today(ole_coverage or [], previous_ole, recommendations, now)
     social_items = storage.leer_buzon_social() if hasattr(storage, "leer_buzon_social") else []
+    desk_themes = enrich_themes(panorama_themes or themes, ole_coverage)
     editorial_desk = build_editorial_desk(
-        enriched_themes, changes, recommendations, discoveries, source_health,
+        desk_themes, changes, recommendations, discoveries, source_health,
         social_items=social_items, now=now,
         min_topics=env_int("EDITORIAL_SUMMARY_MIN_TOPICS", 30, 10, 50),
         max_topics=env_int("EDITORIAL_SUMMARY_MAX_TOPICS", 40, 15, 60),
+        cut_quality=cut_quality,
     )
     source_editor = build_source_editor_view(source_health)
 
@@ -142,7 +145,9 @@ def run(themes: list[dict], agenda: list[dict], source_health: list[dict], stora
         "opportunities": len(opportunities),
         "alerts_sent": sent_alerts,
         "report_sent": sent_report,
-        "detail": f"mode={mode}; report={report_type}; discoveries={len(discoveries)}",
+        "detail": (f"mode={mode}; report={report_type}; discoveries={len(discoveries)}; "
+                   f"cut_quality={(cut_quality or {}).get('state', 'COMPLETO')}; "
+                   f"coverage={(cut_quality or {}).get('coverage_pct', 100)}%"),
     })
     return {
         "enabled": True,
