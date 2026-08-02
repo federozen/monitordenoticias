@@ -13,7 +13,9 @@ import anthropic
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+from urllib.parse import urljoin
 
 MAX_ITEMS = 50
 SIMILITUD_UMBRAL = 0.22
@@ -31,7 +33,7 @@ FUENTES_NAC = [
     {"id": "dobleamarilla","nombre": "Doble Amarilla", "url": "https://news.google.com/rss/search?q=%22Doble%20Amarilla%22&hl=es-419&gl=AR&ceid=AR:es-419", "color": "#a07800", "es_rss": True},
     {"id": "bolavip",       "nombre": "Bolavip",        "url": "https://bolavip.com/ar",                              "color": "#c04a00"},
     {"id": "lavoz",         "nombre": "La Voz",         "url": "https://www.lavoz.com.ar/deportes/",                  "color": "#8b0000"},
-    {"id": "capital",    "nombre": "La Capital (Ovación)", "url": "https://news.google.com/rss/search?q=site:lacapital.com.ar%20futbol&hl=es-419&gl=AR&ceid=AR:es-419", "color": "#8e44ad", "es_rss": True},
+    {"id": "capital",    "nombre": "La Capital (Ovación)", "url": "https://www.lacapital.com.ar/secciones/ovacion.html", "color": "#8e44ad", "gnews": "lacapital.com.ar"},
     {"id": "na",         "nombre": "NA Deportes",      "url": "https://news.google.com/rss/search?q=site:noticiasargentinas.com%20(futbol%20OR%20deportes)&hl=es-419&gl=AR&ceid=AR:es-419", "color": "#2c3e50", "es_rss": True},
 
     # ── Nuevas nacionales (vía Google News) ──
@@ -41,6 +43,12 @@ FUENTES_NAC = [
     {"id": "ambito",     "nombre": "Ámbito Deportes",  "url": "https://news.google.com/rss/search?q=site:ambito.com%20futbol&hl=es-419&gl=AR&ceid=AR:es-419",                  "color": "#00594e", "es_rss": True},
     {"id": "afa",        "nombre": "AFA (oficial)",    "url": "https://news.google.com/rss/search?q=site:afa.com.ar&hl=es-419&gl=AR&ceid=AR:es-419",                           "color": "#6cace4", "es_rss": True},
     {"id": "radar_ar",   "nombre": "Radar AR",         "url": "https://news.google.com/rss/search?q=%22f%C3%BAtbol%20argentino%22&hl=es-419&gl=AR&ceid=AR:es-419",             "color": "#444444", "es_rss": True},
+    # Fuentes directas regionales y oficiales: reducen dependencia de Google News.
+    {"id": "diariouno",  "nombre": "Diario UNO Ovación", "url": "https://www.diariouno.com.ar/ovacion", "color": "#d71920", "gnews": "diariouno.com.ar"},
+    {"id": "uar",        "nombre": "UAR (oficial)",      "url": "https://uar.com.ar/noticias/", "color": "#55aadd", "gnews": "uar.com.ar"},
+    {"id": "cab",        "nombre": "CAB (oficial)",      "url": "https://www.argentina.basketball/", "color": "#1d4f91", "gnews": "argentina.basketball"},
+    {"id": "aat",        "nombre": "AAT (oficial)",      "url": "https://aat.com.ar/", "color": "#005a9c", "gnews": "aat.com.ar"},
+    {"id": "actc",       "nombre": "ACTC (oficial)",     "url": "https://actc.org.ar/tc/noticias/", "color": "#111111", "gnews": "actc.org.ar"},
 ]
 
 FUENTES_INT = [
@@ -76,7 +84,7 @@ FUENTES_INT = [
     {"id": "kicker",     "nombre": "Kicker (DE)",      "url": "https://news.google.com/rss/search?q=site:kicker.de&hl=de&gl=DE&ceid=DE:de",                                    "color": "#c00d0d", "es_rss": True},
     {"id": "athletic",   "nombre": "The Athletic",     "url": "https://news.google.com/rss/search?q=site:nytimes.com/athletic%20football&hl=en-US&gl=US&ceid=US:en",           "color": "#00292f", "es_rss": True},
     {"id": "ovacion",    "nombre": "Ovación (UY)",     "url": "https://news.google.com/rss/search?q=site:elpais.com.uy%20futbol&hl=es-419&gl=AR&ceid=AR:es-419",               "color": "#75aadb", "es_rss": True},
-    {"id": "conmebol",   "nombre": "CONMEBOL",         "url": "https://news.google.com/rss/search?q=site:conmebol.com&hl=es-419&gl=AR&ceid=AR:es-419",                         "color": "#002b5c", "es_rss": True},
+    {"id": "conmebol",   "nombre": "CONMEBOL",         "url": "https://www.conmebol.com/ultimas-noticias/", "color": "#002b5c", "gnews": "conmebol.com"},
     {"id": "uefa",       "nombre": "UEFA / Champions", "url": "https://news.google.com/rss/search?q=(UEFA%20OR%20%22Champions%20League%22%20OR%20Europa%20League)&hl=es-419&gl=AR&ceid=AR:es-419", "color": "#00004b", "es_rss": True},
 
     # ── Nuevas internacionales (vía Google News, con su edición de idioma) ──
@@ -89,6 +97,9 @@ FUENTES_INT = [
     {"id": "efe",       "nombre": "EFE (agencia)",   "url": "https://news.google.com/rss/search?q=site:efe.com/deportes&hl=es-419&gl=AR&ceid=AR:es-419", "color": "#0055a5", "es_rss": True},
     {"id": "afp_f24",   "nombre": "AFP (France 24)", "url": "https://news.google.com/rss/search?q=site:france24.com/es%20(futbol%20OR%20deportes%20OR%20Argentina)&hl=es-419&gl=AR&ceid=AR:es-419", "color": "#0f3b8c", "es_rss": True},
     {"id": "reuters_dep","nombre": "Reuters Sports", "url": "https://news.google.com/rss/search?q=site:reuters.com%20(soccer%20OR%20football%20OR%20Argentina)&hl=en-US&gl=US&ceid=US:en", "color": "#ff8000", "es_rss": True},
+    {"id": "sportspro", "nombre": "SportsPro", "url": "https://www.sportspro.com/news/feed/", "color": "#182b49", "es_rss": True, "sin_fallback": True},
+    {"id": "frontoffice", "nombre": "Front Office Sports", "url": "https://frontofficesports.com/", "color": "#111111", "gnews": "frontofficesports.com"},
+    {"id": "olympics", "nombre": "Olympics / IOC", "url": "https://www.olympics.com/ioc/news", "color": "#0078d0", "gnews": "olympics.com"},
 
     # Radares de descubrimiento: no cuentan como publishers; sirven para encontrar
     # historias poco obvias y luego se conserva el medio original de Google News.
@@ -441,63 +452,281 @@ def coincide_cobertura(a: set, b: set) -> bool:
     return len(sa & sb) >= 2 and solapamiento(sa, sb) >= 0.5
 
 
-def fetch_ultimas_ole() -> list:
-    """Scrapea https://www.ole.com.ar/ultimas-noticias — el listado completo de
-    lo publicado, incluidas las notas que nunca pisan la portada. Devuelve
-    [{titulo, url}, ...]. Basado en el patrón data-noteid del sitio (estable),
-    con la clase del listado como respaldo (parcial, sin el hash)."""
+_OLE_FETCH_META = {
+    "status": "sin_ejecutar", "pages": 0, "items": 0, "dated_items": 0,
+    "today_items": 0, "earliest_today": "", "latest_today": "", "detail_requests": 0,
+}
+_OLE_TZ = ZoneInfo("America/Argentina/Buenos_Aires")
+
+
+def get_ole_fetch_meta() -> dict:
+    """Metadata del último recorrido de /ultimas-noticias para la interfaz."""
+    return dict(_OLE_FETCH_META)
+
+
+def _ole_normalize_url(href: str) -> str:
+    if not href:
+        return ""
+    url = urljoin("https://www.ole.com.ar", href.strip())
+    return url.split("#", 1)[0]
+
+
+def _ole_jsonld_dates(soup: BeautifulSoup) -> dict[str, dict]:
+    """Extrae fechas por URL desde JSON-LD de listados o notas."""
+    result: dict[str, dict] = {}
+
+    def walk(value):
+        if isinstance(value, list):
+            for item in value:
+                walk(item)
+            return
+        if not isinstance(value, dict):
+            return
+        url = value.get("url") or value.get("@id") or value.get("mainEntityOfPage")
+        if isinstance(url, dict):
+            url = url.get("@id") or url.get("url")
+        url = _ole_normalize_url(str(url or ""))
+        published = str(value.get("datePublished") or value.get("uploadDate") or "").strip()
+        modified = str(value.get("dateModified") or "").strip()
+        if url and (published or modified):
+            result[url] = {"published": published, "modified": modified}
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                walk(child)
+
+    for script in soup.select('script[type="application/ld+json"]'):
+        raw = script.string or script.get_text("", strip=True)
+        if not raw:
+            continue
+        try:
+            walk(json.loads(raw))
+        except Exception:
+            continue
+    return result
+
+
+def _ole_parse_listing(html: str, page_number: int = 1) -> list[dict]:
+    soup = BeautifulSoup(html, "html.parser")
+    jsonld = _ole_jsonld_dates(soup)
+    containers = soup.select("div[data-noteid]")
+    if not containers:
+        containers = soup.select("li[class*='listado'], article, [class*='listado']")
+    out, seen = [], set()
+    for cont in containers:
+        a = cont.find("a", href=True)
+        if not a:
+            continue
+        url = _ole_normalize_url(a.get("href", ""))
+        if not url or "ole.com.ar" not in url or url in seen:
+            continue
+        title_el = cont.find(["h1", "h2", "h3", "h4"]) or a
+        title = " ".join(title_el.get_text(" ", strip=True).split())
+        if len(title) < 16:
+            slug = url.rstrip("/").split("/")[-1].replace(".html", "")
+            title = slug.replace("-", " ").capitalize()
+        if len(title) < 16:
+            continue
+        published = ""
+        modified = ""
+        time_el = cont.find("time")
+        if time_el:
+            published = str(time_el.get("datetime") or time_el.get("dateTime") or time_el.get("content") or "").strip()
+        for attr in ("data-published", "data-date", "data-fecha", "data-time", "data-timestamp"):
+            if not published and cont.get(attr):
+                published = str(cont.get(attr)).strip()
+        meta = jsonld.get(url, {})
+        published = published or meta.get("published", "")
+        modified = meta.get("modified", "")
+        seen.add(url)
+        out.append({
+            "titulo": title[:250], "url": url, "imagen": "",
+            "fecha_publicacion": published, "fecha_actualizacion": modified,
+            "ole_page": page_number,
+        })
+    return out
+
+
+def _ole_article_dates(url: str) -> tuple[str, str]:
+    """Consulta una nota solo cuando el listado no ofrece fecha."""
     try:
-        resp = requests.get("https://www.ole.com.ar/ultimas-noticias",
-                            headers=HEADERS, timeout=15)
+        resp = requests.get(url, headers=HEADERS, timeout=12)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
-        contenedores = soup.select("div[data-noteid]")
-        if not contenedores:
-            contenedores = soup.select("li[class*='listado']")
-        out, vistos = [], set()
-        for cont in contenedores:
-            a = cont.find("a", href=True)
-            if not a:
-                continue
-            href = a["href"]
-            if href.startswith("/"):
-                href = "https://www.ole.com.ar" + href
-            if not href.startswith("http") or href in vistos:
-                continue
-            t_el = cont.find(["h1", "h2", "h3", "h4"])
-            titulo = " ".join((t_el.get_text(strip=True) if t_el
-                               else a.get_text(strip=True)).split())
-            if len(titulo) < 16:
-                # último recurso: armar el título desde el slug de la URL
-                slug = href.rstrip("/").split("/")[-1].replace(".html", "")
-                titulo = slug.replace("-", " ").capitalize()
-                if len(titulo) < 16:
-                    continue
-            fecha_publicacion = ""
-            time_el = cont.find("time")
+        published = ""
+        modified = ""
+        for selector in (
+            'meta[property="article:published_time"]', 'meta[name="date"]',
+            'meta[name="publish-date"]', 'meta[itemprop="datePublished"]',
+        ):
+            tag = soup.select_one(selector)
+            if tag and tag.get("content"):
+                published = str(tag.get("content")).strip()
+                break
+        for selector in (
+            'meta[property="article:modified_time"]', 'meta[name="last-modified"]',
+            'meta[itemprop="dateModified"]',
+        ):
+            tag = soup.select_one(selector)
+            if tag and tag.get("content"):
+                modified = str(tag.get("content")).strip()
+                break
+        jsonld = _ole_jsonld_dates(soup).get(_ole_normalize_url(url), {})
+        published = published or jsonld.get("published", "")
+        modified = modified or jsonld.get("modified", "")
+        if not published:
+            time_el = soup.find("time")
             if time_el:
-                fecha_publicacion = str(
-                    time_el.get("datetime") or time_el.get("dateTime")
-                    or time_el.get("content") or ""
-                ).strip()
-            vistos.add(href)
-            out.append({
-                "titulo": titulo[:250], "url": href, "imagen": "",
-                "fecha_publicacion": fecha_publicacion,
-            })
-        return out[:MAX_ITEMS]
+                published = str(time_el.get("datetime") or time_el.get("content") or "").strip()
+        return published, modified
     except Exception:
-        return []
+        return "", ""
+
+
+def _ole_parse_datetime(value: str) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if text.isdigit():
+        try:
+            stamp = int(text)
+            if stamp > 10_000_000_000:
+                stamp //= 1000
+            return datetime.fromtimestamp(stamp, tz=_OLE_TZ)
+        except Exception:
+            return None
+    normalized = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=_OLE_TZ)
+        return parsed.astimezone(_OLE_TZ)
+    except Exception:
+        pass
+    for fmt in ("%d/%m/%Y %H:%M", "%d/%m/%Y", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=_OLE_TZ)
+        except Exception:
+            continue
+    return None
+
+
+def fetch_ultimas_ole() -> list:
+    """Reconstruye el día de Olé recorriendo la paginación de Últimas Noticias.
+
+    El recorrido se detiene cuando llega con certeza a publicaciones anteriores
+    a las 00:00 de Argentina. Si el listado no expone fechas, consulta solo las
+    notas de borde de cada página y, en la página de transición, completa las
+    fechas faltantes. La metadata queda disponible con ``get_ole_fetch_meta``.
+    """
+    global _OLE_FETCH_META
+    now = datetime.now(_OLE_TZ)
+    start_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    max_pages = max(2, int(os.environ.get("OLE_MAX_PAGES", "8") or 8))
+    detail_limit = max(0, int(os.environ.get("OLE_DETAIL_DATE_LIMIT", "35") or 35))
+    all_items: list[dict] = []
+    seen: set[str] = set()
+    pages_done = 0
+    detail_requests = 0
+    stop_reason = "max_pages"
+    reached_previous_day = False
+
+    for page in range(1, max_pages + 1):
+        url = "https://www.ole.com.ar/ultimas-noticias/page" if page == 1 else f"https://www.ole.com.ar/ultimas-noticias/page/{page}"
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=18)
+            resp.raise_for_status()
+            page_items = _ole_parse_listing(resp.text, page)
+        except Exception as exc:
+            stop_reason = f"error_pagina_{page}: {type(exc).__name__}"
+            break
+        pages_done += 1
+        page_items = [item for item in page_items if item.get("url") and item["url"] not in seen]
+        if not page_items:
+            stop_reason = "sin_items_nuevos"
+            break
+
+        # Determinar el rango de la página. Si no hay fechas, consultar primero y último.
+        dated = [_ole_parse_datetime(item.get("fecha_publicacion", "")) for item in page_items]
+        dated = [value for value in dated if value is not None]
+        if not dated and detail_requests < detail_limit:
+            for boundary in (0, len(page_items) - 1):
+                item = page_items[boundary]
+                if item.get("fecha_publicacion"):
+                    continue
+                published, modified = _ole_article_dates(item["url"])
+                detail_requests += 1
+                item["fecha_publicacion"] = published
+                item["fecha_actualizacion"] = modified
+            dated = [_ole_parse_datetime(item.get("fecha_publicacion", "")) for item in page_items]
+            dated = [value for value in dated if value is not None]
+
+        newest = max(dated) if dated else None
+        oldest = min(dated) if dated else None
+        boundary_page = bool(newest and newest >= start_today and oldest and oldest < start_today)
+        entirely_old = bool(newest and newest < start_today)
+
+        if entirely_old:
+            reached_previous_day = True
+            stop_reason = "dia_anterior"
+            break
+
+        if boundary_page and detail_requests < detail_limit:
+            # La frontera de las 00:00 está dentro de esta página: fechar los
+            # elementos faltantes para no aceptar noticias de ayer por error.
+            for item in page_items:
+                if item.get("fecha_publicacion") or detail_requests >= detail_limit:
+                    continue
+                published, modified = _ole_article_dates(item["url"])
+                detail_requests += 1
+                item["fecha_publicacion"] = published
+                item["fecha_actualizacion"] = modified
+
+        for item in page_items:
+            published_dt = _ole_parse_datetime(item.get("fecha_publicacion", ""))
+            if published_dt is not None and published_dt < start_today:
+                reached_previous_day = True
+                continue
+            seen.add(item["url"])
+            all_items.append(item)
+
+        if boundary_page:
+            stop_reason = "frontera_del_dia"
+            reached_previous_day = True
+            break
+
+    dated_today = []
+    for item in all_items:
+        parsed = _ole_parse_datetime(item.get("fecha_publicacion", ""))
+        if parsed is not None and parsed.date() == now.date():
+            dated_today.append(parsed)
+    status = "completa" if reached_previous_day else ("estimada" if all_items else "parcial")
+    _OLE_FETCH_META = {
+        "status": status,
+        "pages": pages_done,
+        "items": len(all_items),
+        "dated_items": sum(1 for item in all_items if _ole_parse_datetime(item.get("fecha_publicacion", ""))),
+        "today_items": len(dated_today),
+        "earliest_today": min(dated_today).isoformat(timespec="minutes") if dated_today else "",
+        "latest_today": max(dated_today).isoformat(timespec="minutes") if dated_today else "",
+        "detail_requests": detail_requests,
+        "stop_reason": stop_reason,
+    }
+    return all_items
 
 
 def fetch_cobertura_ole_gnews() -> list:
-    """Trae por Google News lo último publicado por Olé (más allá de su
-    portada). Devuelve [{titulo, url}, ...]."""
+    """Respaldo fechado de Google News para publicaciones de Olé."""
     try:
         resp = _gnews_get(_gnews_url("ole.com.ar", "ole"), timeout=15)
         resp.raise_for_status()
-        return [{"titulo": _limpiar_titulo_gnews(n["titulo"]), "url": n.get("url") or ""}
-                for n in extraer_rss(resp.text)]
+        result = []
+        for item in extraer_rss(resp.text):
+            result.append({
+                **item,
+                "titulo": _limpiar_titulo_gnews(item.get("titulo", "")),
+                "url": item.get("url") or "",
+            })
+        return result
     except Exception:
         return []
 
@@ -906,7 +1135,7 @@ def _franja_horaria(hora: str) -> str:
 
 def _dia_semana(fecha: str) -> str:
     """'2026-07-17' o '17/07' → 'vie'. '' si no parsea."""
-    from datetime import datetime
+    from datetime import datetime, timedelta
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d/%m"):
         try:
             d = datetime.strptime(fecha.strip(), fmt)
@@ -1945,6 +2174,17 @@ def extraer_generico(html: str, fuente: dict) -> list:
             return resolve_url(link.get("href", ""))
         return None
 
+    def get_fecha(el):
+        time_el = el.find("time")
+        if time_el:
+            value = time_el.get("datetime") or time_el.get("dateTime") or time_el.get("content")
+            if value:
+                return str(value).strip()
+        for attr in ("data-published", "data-date", "data-fecha", "data-time", "data-timestamp"):
+            if el.get(attr):
+                return str(el.get(attr)).strip()
+        return ""
+
     # Patrones de clases/padres que indican imagen de firma/autor (NO foto de nota)
     AUTOR_PATTERNS = [
         "author", "autor", "firma", "byline", "avatar", "perfil", "profile",
@@ -2086,7 +2326,7 @@ def extraer_generico(html: str, fuente: dict) -> list:
             vistos.add(titulo)
             url = get_url(card, titulo_el)
             imagen = get_imagen(card)
-            noticias.append({"titulo": titulo, "url": url, "imagen": imagen})
+            noticias.append({"titulo": titulo, "url": url, "imagen": imagen, "fecha_publicacion": get_fecha(card)})
 
     # Fallback: sólo headings
     if len(noticias) < 8:
@@ -2100,7 +2340,7 @@ def extraer_generico(html: str, fuente: dict) -> list:
                 vistos.add(titulo)
                 link = el.find_parent("a") or el.find("a")
                 url = resolve_url(link.get("href", "")) if link else None
-                noticias.append({"titulo": titulo, "url": url})
+                noticias.append({"titulo": titulo, "url": url, "fecha_publicacion": get_fecha(el.parent or el)})
 
     return noticias[:MAX_ITEMS]
 
@@ -2120,6 +2360,8 @@ GNEWS_LOC = {
     "bbc": ("en-US", "US", "US:en"), "cbssport": ("en-US", "US", "US:en"),
     "goal": ("en-US", "US", "US:en"), "espnint": ("en-US", "US", "US:en"),
     "sportnews": ("en-US", "US", "US:en"), "fifa": ("en-US", "US", "US:en"),
+    "sportspro": ("en-US", "US", "US:en"), "frontoffice": ("en-US", "US", "US:en"),
+    "olympics": ("en-US", "US", "US:en"),
     # francés
     "lequipe": ("fr", "FR", "FR:fr"), "footmercato": ("fr", "FR", "FR:fr"),
     # portugués
@@ -2450,7 +2692,7 @@ def exportar_recorte_argentina(resultados: dict) -> str:
     """Recorte de titulares internacionales que mencionan a la Argentina.
     Dedup POR MEDIO (no global): si tres medios titulan la misma historia,
     entran las tres versiones — clave para el sentimiento por país."""
-    from datetime import datetime
+    from datetime import datetime, timedelta
     lineas_notas = []
     for f in _fuentes_int_reales():
         vistos = set()
@@ -2475,7 +2717,7 @@ def exportar_panorama_internacional(resultados: dict) -> str:
     """TODOS los titulares del panorama internacional, sin filtro ni tope,
     agrupados por medio. Para que la IA del editor haga el recorte con
     contexto completo (nada queda afuera)."""
-    from datetime import datetime
+    from datetime import datetime, timedelta
     partes, total = [], 0
     for f in _fuentes_int_reales():
         notas = resultados.get(f["id"], [])
@@ -2553,7 +2795,7 @@ def fetch_trends_ar(max_items: int = 20) -> list:
 def exportar_titulos_ole(resultados: dict) -> str:
     """Solo los títulos de Olé del panorama del día, en texto limpio —
     para auditar la calidad editorial propia."""
-    from datetime import datetime
+    from datetime import datetime, timedelta
     notas = resultados.get("ole", [])
     vistos, lineas = set(), []
     for n in notas:
@@ -2571,7 +2813,7 @@ def exportar_panorama_total(resultados: dict) -> str:
     """TODOS los titulares scrapeados (nacionales + primicias + internacionales),
     con Olé primero, agrupados por medio, sin tope. Para adjuntar a cualquier IA
     y consultar sobre el panorama completo del día."""
-    from datetime import datetime
+    from datetime import datetime, timedelta
     ole = [f for f in FUENTES_NAC if f["id"] == "ole"]
     resto_nac = [f for f in FUENTES_NAC if f["id"] != "ole"]
     orden = ole + resto_nac + FUENTES_ESP + _fuentes_int_reales()

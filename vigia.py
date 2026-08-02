@@ -21,7 +21,7 @@ import monitor_core
 from monitor_core import (
     TODAS_FUENTES, fetch_fuente, calcular_tendencias,
     analizar_ole_vs_compecencia_safe, construir_agenda, normalizar_titulo,
-    fetch_cobertura_ole_gnews, fetch_ultimas_ole, coincide_cobertura,
+    fetch_cobertura_ole_gnews, fetch_ultimas_ole, get_ole_fetch_meta, coincide_cobertura,
     calcular_momentum, es_tema_de_pases, ranking_entidades, dic_entidades,
 )
 import sheets_memoria as mem
@@ -196,17 +196,20 @@ def main():
             prev = []
     monitor_core.CRITERIOS_EDITOR = cfg.get("criterios", "")
     cubiertos, nuevas_ole, ole_coverage, ole_today_items = [], [], [], []
+    ole_fetch_meta = {}
     if not simulacro:
         # persistir lo publicado por Olé en su pestaña, por tres vías:
         # portada (lo destacado) + /ultimas-noticias (TODO, al minuto) + Google News (respaldo)
         portada = [{**item, "ole_origin": "portada"} for item in resultados.get("ole", [])]
         ultimas = [{**item, "ole_origin": "ultimas"} for item in fetch_ultimas_ole()]
+        ole_fetch_meta = get_ole_fetch_meta()
         gnews_ole = [{**item, "ole_origin": "gnews"} for item in fetch_cobertura_ole_gnews()]
         # OLE_HOY usa solo el flujo cronologico y el respaldo fechado. La
         # portada y la memoria de cinco dias siguen sirviendo para comparar
         # cobertura, pero no deben contaminar la vista "hoy".
         ole_today_items = ultimas + gnews_ole
-        print(f"   cobertura Olé: portada {len(portada)} · últimas {len(ultimas)} · gnews {len(gnews_ole)}")
+        print(f"   cobertura Olé: portada {len(portada)} · últimas {len(ultimas)} · gnews {len(gnews_ole)} · "
+              f"páginas {ole_fetch_meta.get('pages', 0)} · estado {ole_fetch_meta.get('status', '')}")
         if legacy_memory:
             nuevas_ole = mem.registrar_cobertura_ole(portada + ultimas + gnews_ole)
         # La memoria se lee para aprovechar el proyecto actual, pero durante la
@@ -316,6 +319,15 @@ def main():
                     "telegram_mode": os.environ.get("TELEGRAM_MODE", "full"),
                     "noticias_corte": total,
                     "temas_corte": len(tendencias),
+                    "ole_cobertura_dia": ole_fetch_meta.get("status", ""),
+                    "ole_paginas_revisadas": ole_fetch_meta.get("pages", 0),
+                    "ole_notas_listado": ole_fetch_meta.get("items", len(ultimas)),
+                    "ole_notas_fechadas": ole_fetch_meta.get("dated_items", 0),
+                    "ole_notas_hoy_fechadas": ole_fetch_meta.get("today_items", 0),
+                    "ole_primera_nota_hoy": ole_fetch_meta.get("earliest_today", ""),
+                    "ole_ultima_nota_hoy": ole_fetch_meta.get("latest_today", ""),
+                    "ole_detalle_fecha_consultas": ole_fetch_meta.get("detail_requests", 0),
+                    "ole_fin_recorrido": ole_fetch_meta.get("stop_reason", ""),
                 },
                 preserve_previous=quality.get("preserve_previous", False),
                 quality_info=quality,

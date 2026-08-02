@@ -670,6 +670,21 @@ def page_desk(data: dict) -> None:
     findings = data.get("findings_editor") or []
     ole_today = data.get("ole_today") or []
     ole_coverage = data.get("ole_coverage_editor") or []
+    today_ar = datetime.now(TZ_AR).date()
+    def _row_date(value):
+        try:
+            parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=TZ_AR)
+            return parsed.astimezone(TZ_AR).date()
+        except Exception:
+            return None
+    ole_published_today = sum(1 for row in ole_today if _row_date(row.get("FechaPublicacion")) == today_ar)
+    ole_updated_only = sum(
+        1 for row in ole_today
+        if _row_date(row.get("FechaActualizacion")) == today_ar
+        and _row_date(row.get("FechaPublicacion")) != today_ar
+    )
     source_rows = data.get("sources_editor") or []
     st.title("Mesa editorial V11")
     st.caption("Una sola pantalla para saber qué pasó, qué cambió, qué publicó Olé, qué falta y qué conviene seguir.")
@@ -678,7 +693,9 @@ def page_desk(data: dict) -> None:
     c1.metric("Temas del corte", len(rows))
     c2.metric("Acciones pendientes", len(actions))
     c3.metric("Hallazgos", len(findings))
-    c4.metric("Notas de Olé hoy", len(ole_today))
+    ole_status = str((data.get("control") or {}).get("ole_cobertura_dia") or "").strip().lower()
+    ole_pages = (data.get("control") or {}).get("ole_paginas_revisadas") or ""
+    c4.metric("Notas de Olé hoy", len(ole_today), delta=f"{ole_pages} pág." if ole_pages else None)
     if rows:
         st.info(f"Corte: {rows[0].get('Desde','')} a {rows[0].get('Hasta','')} · actualizado {rows[0].get('Generado','')}")
     tabs = st.tabs(["Resumen 4H", "Acciones", "Olé hoy", "Hallazgos", "Fuentes", "Parte ampliado"])
@@ -697,6 +714,25 @@ def page_desk(data: dict) -> None:
     with tabs[2]:
         st.subheader("Memoria viva de lo publicado por Olé")
         st.caption("Las notas se agrupan por tema para evitar recomendar otra pieza general cuando ya existen varios enfoques.")
+        control = data.get("control") or {}
+        ole_status = str(control.get("ole_cobertura_dia") or "").strip().lower()
+        ole_detail = (
+            f"{control.get('ole_paginas_revisadas','')} páginas revisadas · "
+            f"{control.get('ole_notas_listado','')} notas recuperadas"
+        ).strip(" ·")
+        ole_range = ""
+        if control.get("ole_primera_nota_hoy") or control.get("ole_ultima_nota_hoy"):
+            ole_range = f" · rango fechado: {control.get('ole_primera_nota_hoy','?')} a {control.get('ole_ultima_nota_hoy','?')}"
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Publicadas hoy", ole_published_today)
+        m2.metric("Actualizadas hoy", ole_updated_only)
+        m3.metric("Temas agrupados", len(ole_coverage))
+        if ole_status == "completa":
+            st.success(f"Cobertura del día completa: {ole_detail}{ole_range}")
+        elif ole_status == "estimada":
+            st.warning(f"Cobertura del día estimada: {ole_detail}{ole_range}. El listado no permitió confirmar con certeza la frontera de las 00:00.")
+        elif ole_status:
+            st.warning(f"Cobertura de Olé parcial: {ole_detail}{ole_range}. Puede faltar parte del día.")
         for group in ole_coverage[:40]:
             with st.expander(f"{group.get('Tema','')} · {group.get('Piezas','0')} pieza(s)"):
                 st.write(f"**Enfoques:** {group.get('Enfoques','')}")
