@@ -2,9 +2,9 @@ name: Monitor V9 - asistente editorial
 
 on:
   schedule:
-    - cron: "5 10-23 * * *"
-    - cron: "5 0-4 * * *"
-  workflow_dispatch:
+    - cron: "5,35 10-23 * * *"   # cada 30 min: 07:05 a 20:35 de Argentina
+    - cron: "5,35 0-4 * * *"     # cada 30 min: 21:05 a 01:35 de Argentina
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -18,47 +18,38 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || vars.AUTOMATION_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 18
-
     steps:
-      - name: Descargar repositorio
-        uses: actions/checkout@v4
-
-      - name: Configurar Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: requirements-vigia.txt
-
-      - name: Instalar dependencias
-        run: pip install -r requirements-vigia.txt
-
-      - name: Buscar, curar y generar informe editorial
+      - run: pip install -r requirements-vigia.txt
+      - name: Buscar, comparar con Ole y generar hallazgos
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
           SHEET_PREFIX: ${{ vars.SHEET_PREFIX || 'V9_' }}
-
-          FRECUENCIA_MINUTOS: ${{ vars.FRECUENCIA_MINUTOS || '50' }}
-
-          TELEGRAM_MODE: ${{ vars.TELEGRAM_MODE || 'full' }}
+          FRECUENCIA_MINUTOS: ${{ vars.FRECUENCIA_MINUTOS || '25' }}
+          MAX_ANTIGUEDAD_HORAS: ${{ vars.MAX_ANTIGUEDAD_HORAS || '4' }}
+          DISCOVERY_MAX_AGE_HOURS: ${{ vars.DISCOVERY_MAX_AGE_HOURS || '8' }}
+          DISCOVERY_MIN_SCORE: ${{ vars.DISCOVERY_MIN_SCORE || '58' }}
+          TELEGRAM_MODE: ${{ vars.TELEGRAM_MODE || 'off' }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-
           AGENT_ENABLED: ${{ vars.AGENT_ENABLED || 'true' }}
           AGENT_TELEGRAM_MODE: ${{ vars.AGENT_TELEGRAM_MODE || 'off' }}
           AGENT_HOURLY_DIGEST: ${{ vars.AGENT_HOURLY_DIGEST || 'true' }}
           AGENT_OPENING_HOUR: ${{ vars.AGENT_OPENING_HOUR || '8' }}
           AGENT_CLOSING_HOUR: ${{ vars.AGENT_CLOSING_HOUR || '23' }}
           AGENT_MAX_ALERTS: ${{ vars.AGENT_MAX_ALERTS || '4' }}
+          AGENT_MAX_DISCOVERIES: ${{ vars.AGENT_MAX_DISCOVERIES || '10' }}
           AGENT_MAX_OPPORTUNITIES: ${{ vars.AGENT_MAX_OPPORTUNITIES || '6' }}
           AGENT_ALERT_SILENCE_HOURS: ${{ vars.AGENT_ALERT_SILENCE_HOURS || '6' }}
-
-          LEGACY_MEMORY_WRITES_ENABLED: "false"
-          LEGACY_ALERTS_ENABLED: "false"
-          LEGACY_OLE_DIGEST_ENABLED: "false"
-          LEGACY_AI_PARTS_ENABLED: "false"
-
+          LEGACY_MEMORY_WRITES_ENABLED: 'false'
+          LEGACY_ALERTS_ENABLED: 'false'
+          LEGACY_OLE_DIGEST_ENABLED: 'false'
+          LEGACY_AI_PARTS_ENABLED: 'false'
         run: python vigia.py
