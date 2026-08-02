@@ -1,4 +1,4 @@
-name: Monitor V9 - asistente editorial
+name: Monitor V10 - resumen y hallazgos
 
 on:
   schedule:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: monitor-editorial-v9
+  group: monitor-editorial-v10
   cancel-in-progress: false
 
 jobs:
@@ -33,7 +33,7 @@ jobs:
           SHEET_PREFIX: ${{ vars.SHEET_PREFIX || 'V9_' }}
           FRECUENCIA_MINUTOS: ${{ vars.FRECUENCIA_MINUTOS || '25' }}
           MAX_ANTIGUEDAD_HORAS: ${{ vars.MAX_ANTIGUEDAD_HORAS || '4' }}
-          DISCOVERY_MAX_AGE_HOURS: ${{ vars.DISCOVERY_MAX_AGE_HOURS || '8' }}
+          DISCOVERY_MAX_AGE_HOURS: ${{ vars.DISCOVERY_MAX_AGE_HOURS || '12' }}
           DISCOVERY_MIN_SCORE: ${{ vars.DISCOVERY_MIN_SCORE || '58' }}
           TELEGRAM_MODE: ${{ vars.TELEGRAM_MODE || 'off' }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -45,7 +45,7 @@ jobs:
           AGENT_OPENING_HOUR: ${{ vars.AGENT_OPENING_HOUR || '8' }}
           AGENT_CLOSING_HOUR: ${{ vars.AGENT_CLOSING_HOUR || '23' }}
           AGENT_MAX_ALERTS: ${{ vars.AGENT_MAX_ALERTS || '4' }}
-          AGENT_MAX_DISCOVERIES: ${{ vars.AGENT_MAX_DISCOVERIES || '10' }}
+          AGENT_MAX_DISCOVERIES: ${{ vars.AGENT_MAX_DISCOVERIES || '15' }}
           AGENT_MAX_OPPORTUNITIES: ${{ vars.AGENT_MAX_OPPORTUNITIES || '6' }}
           AGENT_ALERT_SILENCE_HOURS: ${{ vars.AGENT_ALERT_SILENCE_HOURS || '6' }}
           LEGACY_MEMORY_WRITES_ENABLED: 'false'
