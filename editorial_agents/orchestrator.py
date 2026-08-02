@@ -5,11 +5,12 @@ import time
 from typing import Callable
 
 from .coverage import enrich_themes
+from .briefing import build as build_briefing
 from .curator import curate
 from .discovery import generate as generate_discoveries
 from .executive import alert_message, build_report
 from .opportunities import generate as generate_opportunities
-from .utils import env_bool, env_int, now_ar
+from .utils import env_bool, env_int, now_ar, safe_html
 
 
 def _telegram_mode() -> str:
@@ -29,7 +30,7 @@ def _report_type(hour: int) -> str:
 def run(themes: list[dict], agenda: list[dict], source_health: list[dict], storage,
         send_telegram: Callable[..., bool] | None = None, config: dict | None = None,
         force: bool = False, raw_results: dict | None = None,
-        ole_coverage: list[dict] | None = None) -> dict:
+        ole_coverage: list[dict] | None = None, previous_themes: list[dict] | None = None) -> dict:
     start = time.perf_counter()
     enabled = env_bool("AGENT_ENABLED", False) or force
     if not enabled:
@@ -52,8 +53,20 @@ def run(themes: list[dict], agenda: list[dict], source_health: list[dict], stora
     now = now_ar()
     report_type = _report_type(now.hour)
     report = build_report(recommendations, discoveries, opportunities, source_health, report_type, now)
+    changes, briefing = build_briefing(
+        enriched_themes, previous_themes or [], recommendations, discoveries, source_health
+    )
+    # El informe horario usa el resumen comparado: cuenta cambios y hallazgos,
+    # no repite el inventario completo del monitor.
+    report["title"] = briefing.get("title", report.get("title", "RESUMEN EDITORIAL"))
+    report["plain_text"] = briefing.get("plain_text", report.get("plain_text", ""))
+    report["telegram_html"] = (
+        f"<b>{safe_html(report['title'])}</b>\n\n{safe_html(report['plain_text'])}"
+    )
 
     storage.guardar_agente_snapshot(recommendations, discoveries, opportunities)
+    if hasattr(storage, "guardar_briefing_snapshot"):
+        storage.guardar_briefing_snapshot(changes, briefing)
     storage.registrar_informe(report)
 
     mode = _telegram_mode()
@@ -116,6 +129,8 @@ def run(themes: list[dict], agenda: list[dict], source_health: list[dict], stora
         "discoveries": discoveries,
         "opportunities": opportunities,
         "report": report,
+        "changes": changes,
+        "briefing": briefing,
         "alerts_sent": sent_alerts,
         "report_sent": sent_report,
         "duration_seconds": duration,

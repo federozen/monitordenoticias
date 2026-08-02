@@ -7,63 +7,67 @@ from typing import Any
 from .coverage import best_ole_match, normalize_ole_items
 from .utils import clamp, normalize_text, stable_id, unique_strings
 
+# El radar no depende de una palabra magica: estas pistas mejoran el puntaje,
+# pero siempre devuelve los mejores candidatos internacionales del corte.
 RARE_HINTS = {
+    # espanol / ingles
     "insolito", "insolita", "bizarre", "weird", "strange", "unusual", "curious",
     "record", "historico", "historic", "historia", "primera vez", "youngest", "oldest",
     "viral", "video", "imagen", "foto", "fan", "hincha", "supporter", "crowd",
-    "estadio", "stadium", "tecnologia", "technology", "robot", "inteligencia artificial",
+    "estadio", "stadium", "tecnologia", "technology", "robot", "artificial intelligence",
     "millones", "million", "billion", "fortuna", "salario", "premio", "money",
-    "rescato", "saved", "rescue", "milagro", "miracle", "emocion", "tears",
-    "escandalo", "scandal", "denuncia", "court", "tribunal", "ban", "sancion",
-    "muerte", "murio", "fallecio", "death", "accident", "accidente",
-    "mascota", "animal", "wedding", "casamiento", "tattoo", "tatuaje",
-    "gol de arquero", "goalkeeper score", "goalkeeper scored", "own goal", "autogol",
+    "milagro", "miracle", "emocion", "tears", "escandalo", "scandal", "court", "ban",
+    "muerte", "murio", "death", "accident", "mascota", "animal", "wedding", "tattoo",
+    "gol de arquero", "goalkeeper scored", "own goal", "autogol", "comeback", "remontada",
+    # portugues
+    "inusitado", "curioso", "recorde", "historico", "viralizou", "torcida", "milagre",
+    "escandalo", "expulso", "goleiro marcou", "virada", "emocionante",
+    # italiano
+    "insolito", "curioso", "record", "storico", "virale", "tifosi", "miracolo",
+    "scandalo", "portiere segna", "rimonta",
+    # frances
+    "insolite", "curieux", "record", "historique", "viral", "supporters", "miracle",
+    "scandale", "gardien buteur", "remontee",
+    # aleman
+    "kurios", "rekord", "historisch", "viral", "fans", "wunder", "skandal", "torwart tor",
 }
 
 VISUAL_HINTS = {
-    "video", "imagen", "foto", "viral", "camara", "camera", "celebracion",
-    "celebration", "hinchas", "fans", "estadio", "stadium", "golazo", "blooper",
+    "video", "imagen", "foto", "viral", "camara", "camera", "celebracion", "celebration",
+    "hinchas", "fans", "torcida", "tifosi", "supporters", "estadio", "stadium", "golazo",
+    "blooper", "viralizou", "virale",
 }
 
 DATA_HINTS = {
-    "record", "historico", "primera vez", "youngest", "oldest", "racha",
-    "estadistica", "stat", "million", "millones", "ranking", "marca",
+    "record", "recorde", "rekord", "historico", "historic", "historique", "storico",
+    "primera vez", "youngest", "oldest", "racha", "estadistica", "stat", "million",
+    "millones", "ranking", "marca",
 }
 
 ROUTINE_HINTS = {
-    "probable formacion", "probable lineup", "training", "entrenamiento", "practica",
-    "preview", "previa", "where to watch", "donde ver", "hora y tv", "convocados",
-    "said", "dijo", "hablo", "declaracion", "press conference", "conferencia",
-    "rumor", "could sign", "interested in", "sondeo", "interesa", "negocia",
+    "probable formacion", "probable lineup", "training", "entrenamiento", "practica", "preview",
+    "previa", "where to watch", "donde ver", "hora y tv", "convocados", "said", "dijo",
+    "hablo", "declaracion", "press conference", "conferencia", "rumor", "could sign",
+    "interested in", "sondeo", "interesa", "negocia", "mercato", "calciomercato",
 }
 
 ARGENTINA_HINTS = {
-    "argentin", "messi", "scaloni", "dibu", "emiliano martinez", "julian alvarez",
-    "lautaro", "enzo fernandez", "mac allister", "cuti romero", "garnacho",
-    "mastantuono", "nico paz", "di maria", "de paul", "otamendi", "simeone",
-    "bielsa", "pochettino", "gallardo", "river", "boca", "racing", "independiente",
-    "san lorenzo", "libertadores", "sudamericana", "rival de argentina",
+    "argentin", "messi", "scaloni", "dibu", "emiliano martinez", "julian alvarez", "lautaro",
+    "enzo fernandez", "mac allister", "cuti romero", "garnacho", "mastantuono", "nico paz",
+    "di maria", "de paul", "otamendi", "simeone", "bielsa", "pochettino", "gallardo",
+    "river", "boca", "racing", "independiente", "san lorenzo", "libertadores", "sudamericana",
 }
 
 GLOBAL_HINTS = {
-    "real madrid", "barcelona", "manchester", "liverpool", "arsenal", "chelsea",
-    "psg", "bayern", "juventus", "milan", "inter", "champions", "world cup",
-    "mundial", "premier league", "la liga", "serie a", "formula 1", "nba",
-    "mbappe", "haaland", "cristiano", "neymar", "vinicius", "lamine yamal",
+    "real madrid", "barcelona", "manchester", "liverpool", "arsenal", "chelsea", "psg",
+    "bayern", "juventus", "milan", "inter", "champions", "world cup", "mundial",
+    "premier league", "la liga", "serie a", "formula 1", "nba", "mbappe", "haaland",
+    "cristiano", "neymar", "vinicius", "lamine yamal",
 }
 
 QUALITY_SOURCE_IDS = {
-    "bbc", "guardian", "reuters_dep", "efe", "afp_f24", "fifa", "uefa",
-    "conmebol", "athletic", "lequipe", "gazzetta", "globo", "geglobo",
-}
-
-EXCLUDED_SOURCE_IDS = {
-    "ole", "espn", "tyc", "infobae", "lanacion", "tn", "clarin", "elgrafico",
-    "dobleamarilla", "bolavip", "lavoz", "capital", "na", "cuatro42", "cielosports",
-    "popular", "ambito", "afa", "radar_ar", "tntsports",
-    "merlo", "grova", "ligapro", "arbitros", "gn_river", "gn_boca",
-    "gn_selec", "gn_pases", "juveniles", "gn_racing", "gn_inde",
-    "gn_sanlo", "gn_messi", "gn_colap",
+    "bbc", "guardian", "reuters_dep", "efe", "afp_f24", "fifa", "uefa", "conmebol",
+    "athletic", "lequipe", "gazzetta", "globo", "geglobo", "skysports", "kicker",
 }
 
 
@@ -95,7 +99,9 @@ def _category(text: str, arg_hook: bool) -> str:
         return "OPORTUNIDAD VISUAL"
     if any(h in text for h in DATA_HINTS):
         return "DATO O RECORD"
-    return "HISTORIA RARA"
+    if any(h in text for h in RARE_HINTS):
+        return "HISTORIA RARA"
+    return "RADAR INTERNACIONAL"
 
 
 def _story_score(title: str, source_id: str, publisher: str, media_count: int,
@@ -104,35 +110,42 @@ def _story_score(title: str, source_id: str, publisher: str, media_count: int,
     arg_hook = any(h in text for h in ARGENTINA_HINTS)
     rare_hits = [h for h in RARE_HINTS if h in text]
     visual_hits = [h for h in VISUAL_HINTS if h in text]
+    data_hits = [h for h in DATA_HINTS if h in text]
     global_hook = any(h in text for h in GLOBAL_HINTS)
     routine = any(h in text for h in ROUTINE_HINTS)
 
-    value_ar = 12
+    value_ar = 18
     if arg_hook:
-        value_ar += 42
+        value_ar += 40
     if global_hook:
-        value_ar += 20
+        value_ar += 18
     if rare_hits:
-        value_ar += min(24, len(rare_hits) * 8)
+        value_ar += min(24, len(rare_hits) * 7)
     if visual_hits:
         value_ar += 8
+    if data_hits:
+        value_ar += 6
     value_ar = clamp(value_ar)
 
-    score = 18
-    score += 28 if arg_hook else 0
-    score += 16 if global_hook else 0
-    score += min(30, len(rare_hits) * 10)
-    score += min(12, max(0, media_count - 1) * 5)
-    score += 10 if source_id in QUALITY_SOURCE_IDS else 0
-    score += 5 if publisher and publisher.lower() not in {"google news", "gnews"} else 0
-    score -= 24 if routine and not rare_hits else 0
-    score -= 30 if ole_score >= 0.60 else (15 if ole_score >= 0.40 else 0)
+    score = 25
+    score += 24 if arg_hook else 0
+    score += 14 if global_hook else 0
+    score += min(28, len(rare_hits) * 8)
+    score += min(10, len(visual_hits) * 5)
+    score += min(8, len(data_hits) * 4)
+    score += min(12, max(0, media_count - 1) * 4)
+    score += 9 if source_id in QUALITY_SOURCE_IDS else 0
+    score += 4 if publisher and publisher.lower() not in {"google news", "gnews"} else 0
+    score -= 18 if routine and not rare_hits and not arg_hook else 0
+    score -= 28 if ole_score >= 0.62 else (12 if ole_score >= 0.42 else 0)
     if age_hours is None:
-        score -= 18
-    elif age_hours > 8:
-        score -= 18
+        score -= 8
+    elif age_hours > 12:
+        score -= 22
     elif age_hours <= 2:
-        score += 8
+        score += 9
+    elif age_hours <= 6:
+        score += 4
     score = clamp(score)
 
     reasons: list[str] = []
@@ -141,28 +154,43 @@ def _story_score(title: str, source_id: str, publisher: str, media_count: int,
     if global_hook:
         reasons.append("involucra una figura, club o competencia de alcance masivo")
     if rare_hits:
-        reasons.append("contiene una rareza, record o giro narrativo")
+        reasons.append("presenta una rareza, record o giro narrativo")
     if visual_hits:
         reasons.append("tiene potencial visual o de redes")
+    if data_hits:
+        reasons.append("permite una nota de datos o comparacion")
     if source_id in QUALITY_SOURCE_IDS:
-        reasons.append("proviene de una fuente internacional de alta confianza")
+        reasons.append("proviene de una fuente internacional de buena confianza")
     if media_count > 1:
         reasons.append(f"aparece en {media_count} publishers originales")
     if ole_score < 0.38:
         reasons.append("no se encontro una nota equivalente en Ole")
-    elif ole_score < 0.60:
+    elif ole_score < 0.62:
         reasons.append("la coincidencia con Ole es parcial y requiere revision")
     if age_hours is not None:
         reasons.append(f"fue publicada hace {age_hours:.1f} horas")
+    else:
+        reasons.append("la fuente no entrego una fecha verificable")
+    if not reasons:
+        reasons.append("es uno de los mejores candidatos internacionales del corte")
 
     return score, value_ar, reasons, _category(text, arg_hook)
 
 
+def _international_source_ids(source_map: dict) -> set[str]:
+    try:
+        from monitor_core import FUENTES_NAC_IDS, FUENTES_ESP_IDS
+        return set(source_map) - set(FUENTES_NAC_IDS) - set(FUENTES_ESP_IDS)
+    except Exception:
+        return set(source_map)
+
+
 def _collect(results: dict, source_map: dict, max_age_hours: int) -> list[dict]:
     now = datetime.now(timezone.utc)
+    allowed = _international_source_ids(source_map)
     items: list[dict] = []
     for source_id, news_items in (results or {}).items():
-        if source_id in EXCLUDED_SOURCE_IDS:
+        if allowed and source_id not in allowed:
             continue
         source = source_map.get(source_id, {"id": source_id, "nombre": source_id})
         for news in news_items or []:
@@ -188,26 +216,37 @@ def _collect(results: dict, source_map: dict, max_age_hours: int) -> list[dict]:
 def _cluster(items: list[dict]) -> list[list[dict]]:
     clusters: list[list[dict]] = []
     for item in items:
-        placed = False
-        for cluster in clusters:
-            if _jaccard(item["title"], cluster[0]["title"]) >= 0.34:
-                cluster.append(item)
-                placed = True
-                break
-        if not placed:
+        best_index = None
+        best_score = 0.0
+        for index, cluster in enumerate(clusters):
+            score = _jaccard(item["title"], cluster[0]["title"])
+            if score > best_score:
+                best_score = score
+                best_index = index
+        if best_index is not None and best_score >= 0.30:
+            clusters[best_index].append(item)
+        else:
             clusters.append([item])
     return clusters
 
 
+def _status(score: int, strong_threshold: int) -> str:
+    if score >= strong_threshold:
+        return "HALLAZGO FUERTE"
+    if score >= max(38, strong_threshold - 18):
+        return "CANDIDATO"
+    return "EXPLORAR"
+
+
 def generate(results: dict, ole_items: list[dict] | None, previous: list[dict] | None = None,
-             max_items: int = 10, config: dict | None = None) -> list[dict]:
+             max_items: int = 12, config: dict | None = None) -> list[dict]:
     config = config or {}
     max_age_hours = int(
         config.get("discovery_max_age_hours")
-        or os.environ.get("DISCOVERY_MAX_AGE_HOURS", "8")
-        or 8
+        or os.environ.get("DISCOVERY_MAX_AGE_HOURS", "12")
+        or 12
     )
-    min_score = int(os.environ.get("DISCOVERY_MIN_SCORE", "58") or 58)
+    strong_threshold = int(os.environ.get("DISCOVERY_MIN_SCORE", "58") or 58)
     try:
         from monitor_core import TODAS_FUENTES
         source_map = {source["id"]: source for source in TODAS_FUENTES}
@@ -231,8 +270,6 @@ def generate(results: dict, ole_items: list[dict] | None, previous: list[dict] |
             representative["title"], representative["source_id"], representative["publisher"],
             len(publishers), representative.get("age_hours"), float(match.get("score", 0) or 0),
         )
-        if score < min_score:
-            continue
         discovery_id = stable_id(normalize_text(representative["title"]), "d")
         previous_item = prev_by_id.get(discovery_id)
         is_new = previous_item is None
@@ -242,15 +279,19 @@ def generate(results: dict, ole_items: list[dict] | None, previous: list[dict] |
             previous_media = 0
         grew = bool(previous_item) and len(publishers) > previous_media
         if previous_item and not grew:
-            score = max(0, score - 22)
-            reasons.append("ya aparecio en el corte anterior y no sumo nuevos publishers")
+            score = max(0, score - 10)
+            reasons.append("ya aparecio en el corte anterior sin crecimiento")
         elif grew:
             reasons.append(f"sumo {len(publishers) - previous_media} publishers desde el corte anterior")
+
+        status = _status(score, strong_threshold)
+        why = reasons[0] if reasons else "es uno de los mejores candidatos internacionales del corte"
         discoveries.append({
             "discovery_id": discovery_id,
             "title": representative["title"],
             "url": representative.get("url", ""),
             "category": category,
+            "status": status,
             "score": score,
             "value_argentina": value_ar,
             "publishers": publishers,
@@ -263,13 +304,18 @@ def generate(results: dict, ole_items: list[dict] | None, previous: list[dict] |
             "ole_match_title": match.get("title", ""),
             "ole_match_url": match.get("url", ""),
             "reason": ". ".join(unique_strings(reasons)),
+            "why_it_matters": why,
             "suggested_angle": _suggest_angle(category, representative["title"]),
             "suggested_format": _suggest_format(category),
             "evidence": cluster[:8],
-            "notify": (is_new or grew) and score >= 76,
+            "notify": (is_new or grew) and status == "HALLAZGO FUERTE",
         })
 
-    discoveries.sort(key=lambda item: (-item["score"], -item["value_argentina"], item.get("age_hours") or 999))
+    # Nunca deja la seccion vacia si hubo material internacional en el corte.
+    discoveries.sort(key=lambda item: (
+        0 if item["status"] == "HALLAZGO FUERTE" else (1 if item["status"] == "CANDIDATO" else 2),
+        -item["score"], -item["value_argentina"], item.get("age_hours") or 999,
+    ))
     return discoveries[:max_items]
 
 
@@ -280,7 +326,9 @@ def _suggest_angle(category: str, title: str) -> str:
         return "Contar el hecho desde la escena, el video o la imagen y sumar el contexto que la vuelve significativa."
     if category == "DATO O RECORD":
         return "Poner el dato en perspectiva: antecedente, comparacion y por que es excepcional."
-    return "Convertir la rareza en una historia con personaje, conflicto, giro y consecuencia."
+    if category == "HISTORIA RARA":
+        return "Convertir la rareza en una historia con personaje, conflicto, giro y consecuencia."
+    return "Buscar el angulo que haga relevante esta noticia internacional para el lector deportivo argentino."
 
 
 def _suggest_format(category: str) -> str:
@@ -289,4 +337,5 @@ def _suggest_format(category: str) -> str:
         "OPORTUNIDAD VISUAL": "NOTA BREVE + VIDEO",
         "DATO O RECORD": "DATOS / COMPARATIVA",
         "HISTORIA RARA": "HISTORIA / COLOR",
+        "RADAR INTERNACIONAL": "EXPLORACION / SEGUIMIENTO",
     }.get(category, "HISTORIA")

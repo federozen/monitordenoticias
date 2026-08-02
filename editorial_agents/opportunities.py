@@ -13,7 +13,7 @@ def generate(recommendations: list[dict], discoveries: list[dict], max_items: in
     opportunities: list[dict] = []
 
     for item in discoveries:
-        if item.get("score", 0) < 58:
+        if item.get("status") not in {"HALLAZGO FUERTE", "CANDIDATO"} and item.get("score", 0) < 40:
             continue
         category = item.get("category", "HISTORIA RARA")
         angle = item.get("suggested_angle", "Encontrar el giro narrativo y explicar por que importa.")
