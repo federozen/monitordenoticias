@@ -1,28 +1,30 @@
 import unittest
+from datetime import datetime, timezone
 
+from editorial_agents.coverage import enrich_themes
 from editorial_agents.curator import curate
+from editorial_agents.discovery import generate as generate_discoveries
 from editorial_agents.executive import alert_message, build_report
-from editorial_agents.opportunities import generate
+from editorial_agents.opportunities import generate as generate_opportunities
 
 
 class EditorialAgentTests(unittest.TestCase):
     def setUp(self):
+        now = datetime.now(timezone.utc).isoformat()
         self.themes = [
             {
                 "titulo": "River confirmo una baja para el partido del domingo",
                 "url": "https://example.com/river",
-                "cant_medios": 4,
-                "medios_originales": ["Ole", "TyC Sports", "ESPN", "River Oficial"],
+                "cant_medios": 3,
+                "medios_originales": ["TyC Sports", "ESPN", "River Oficial"],
                 "tiene_ole": False,
-                "nac": 4,
-                "intl": 0,
                 "noticias": [
                     {
                         "noticia": {
                             "titulo": "River confirmo una baja para el domingo",
                             "url": "https://example.com/oficial",
                             "publisher_original": "River Oficial",
-                            "fecha_publicacion": "2026-08-01T12:00:00-03:00",
+                            "fecha_publicacion": now,
                         },
                         "fuente": {"id": "river", "nombre": "River Oficial"},
                     },
@@ -31,44 +33,68 @@ class EditorialAgentTests(unittest.TestCase):
                             "titulo": "River tendra una baja ante su rival",
                             "url": "https://example.com/tyc",
                             "publisher_original": "TyC Sports",
+                            "fecha_publicacion": now,
                         },
                         "fuente": {"id": "tyc", "nombre": "TyC Sports"},
                     },
                 ],
             }
         ]
-        self.agenda = [
-            {
-                "accion": "SUBIR YA",
-                "motivo": "4 medios lo tienen y Ole no",
-                "titulo": self.themes[0]["titulo"],
-                "cant_medios": 4,
-                "delta": 2,
-                "nuevo": True,
-            }
-        ]
+        self.agenda = [{
+            "accion": "SUBIR YA", "motivo": "tres medios lo tienen",
+            "titulo": self.themes[0]["titulo"], "cant_medios": 3,
+            "delta": 2, "nuevo": True,
+        }]
 
-    def test_curator_builds_explainable_recommendation(self):
-        recs = curate(self.themes, self.agenda)
-        self.assertEqual(len(recs), 1)
-        self.assertEqual(recs[0]["action"], "PUBLICAR AHORA")
-        self.assertGreaterEqual(recs[0]["confidence"], 70)
-        self.assertTrue(recs[0]["notify"])
-        self.assertIn("medios originales", recs[0]["reason"])
+    def test_covered_equal_is_not_recommended_as_new(self):
+        enriched = enrich_themes(self.themes, [{
+            "titulo": "River confirmo una baja para el partido del domingo",
+            "url": "https://ole.example/river",
+        }])
+        rec = curate(enriched, self.agenda)[0]
+        self.assertEqual(rec["coverage_status"], "CUBIERTO_IGUAL")
+        self.assertEqual(rec["action"], "OBSERVAR")
+        self.assertLess(rec["priority"], 60)
 
-    def test_opportunities_derive_from_recommendations(self):
-        recs = curate(self.themes, self.agenda)
-        opps = generate(recs)
-        self.assertTrue(opps)
-        self.assertIn(opps[0]["format"], {"SERVICIO", "ANALISIS", "PREVIA"})
+    def test_uncovered_recent_theme_is_actionable(self):
+        enriched = enrich_themes(self.themes, [])
+        rec = curate(enriched, self.agenda)[0]
+        self.assertEqual(rec["coverage_status"], "NO_CUBIERTO")
+        self.assertEqual(rec["action"], "PUBLICAR AHORA")
+        self.assertTrue(rec["notify"])
 
-    def test_executive_report_and_alert(self):
-        recs = curate(self.themes, self.agenda)
-        opps = generate(recs)
-        report = build_report(recs, opps, [], "HOURLY")
-        self.assertIn("PRIORIDADES", report["plain_text"])
-        self.assertIn("RESUMEN EDITORIAL", report["telegram_html"])
-        self.assertIn("ALERTA EDITORIAL", alert_message(recs))
+    def test_discovery_prioritizes_rare_international_story(self):
+        now = datetime.now(timezone.utc).isoformat()
+        results = {
+            "bbc": [{
+                "titulo": "Goalkeeper scores historic 98th-minute goal and sends tiny club up",
+                "url": "https://example.com/keeper",
+                "publisher_original": "BBC Sport",
+                "fecha_publicacion": now,
+            }],
+            "guardian": [{
+                "titulo": "Goalkeeper scores historic goal in 98th minute to win promotion",
+                "url": "https://example.com/keeper2",
+                "publisher_original": "The Guardian",
+                "fecha_publicacion": now,
+            }],
+        }
+        discoveries = generate_discoveries(results, [], max_items=5)
+        self.assertTrue(discoveries)
+        self.assertGreaterEqual(discoveries[0]["score"], 58)
+        self.assertIn(discoveries[0]["category"], {"HISTORIA RARA", "DATO O RECORD"})
+
+    def test_report_separates_operations_and_findings(self):
+        recs = curate(enrich_themes(self.themes, []), self.agenda)
+        discoveries = [{
+            "discovery_id": "d_1", "category": "HISTORIA RARA", "title": "Historia inesperada",
+            "score": 80, "value_argentina": 70, "reason": "rareza", "notify": True,
+        }]
+        opps = generate_opportunities(recs, discoveries)
+        report = build_report(recs, discoveries, opps, [], "HOURLY")
+        self.assertIn("NOVEDADES SIN CUBRIR", report["plain_text"])
+        self.assertIn("HALLAZGOS DEL EXTERIOR", report["plain_text"])
+        self.assertIn("ALERTA EDITORIAL", alert_message(recs, discoveries))
 
 
 if __name__ == "__main__":
