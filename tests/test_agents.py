@@ -289,3 +289,76 @@ class V114StrictTimeTests(unittest.TestCase):
         ]
         entries, _ = build_ole_today(items, [], [], now)
         self.assertEqual([item["title"] for item in entries], ["Nota publicada hoy"])
+
+class V115OleAndSourcesTests(unittest.TestCase):
+    def test_trusted_sources_use_direct_pages(self):
+        from monitor_core import TODAS_FUENTES
+        by_id = {item["id"]: item for item in TODAS_FUENTES}
+        for source_id in ("capital", "diariouno", "uar", "cab", "aat", "actc", "conmebol", "sportspro", "frontoffice", "olympics"):
+            self.assertIn(source_id, by_id)
+        self.assertNotIn("news.google.com", by_id["capital"]["url"])
+        self.assertNotIn("news.google.com", by_id["conmebol"]["url"])
+        self.assertTrue(by_id["sportspro"].get("es_rss"))
+
+    def test_ole_pagination_stops_at_previous_day(self):
+        from unittest.mock import patch
+        import monitor_core
+
+        now = datetime.now(monitor_core._OLE_TZ)
+        today = now.replace(hour=10, minute=0, second=0, microsecond=0).isoformat()
+        yesterday = (now - timedelta(days=1)).replace(hour=23, minute=0, second=0, microsecond=0).isoformat()
+
+        page1 = f'''<html><body>
+        <div data-noteid="1"><a href="/futbol/nota-uno_0_a.html"><h2>Primera noticia completa publicada durante el día</h2></a><time datetime="{today}"></time></div>
+        <div data-noteid="2"><a href="/futbol/nota-dos_0_b.html"><h2>Segunda noticia completa publicada durante el día</h2></a><time datetime="{today}"></time></div>
+        </body></html>'''
+        page2 = f'''<html><body>
+        <div data-noteid="3"><a href="/futbol/nota-vieja_0_c.html"><h2>Una noticia completa perteneciente al día anterior</h2></a><time datetime="{yesterday}"></time></div>
+        </body></html>'''
+
+        class Response:
+            def __init__(self, text):
+                self.text = text
+                self.status_code = 200
+            def raise_for_status(self):
+                return None
+
+        def fake_get(url, **kwargs):
+            return Response(page1 if url.endswith("/page") else page2)
+
+        with patch.object(monitor_core.requests, "get", side_effect=fake_get):
+            items = monitor_core.fetch_ultimas_ole()
+        meta = monitor_core.get_ole_fetch_meta()
+        self.assertEqual(len(items), 2)
+        self.assertEqual(meta["status"], "completa")
+        self.assertEqual(meta["pages"], 2)
+        self.assertEqual(meta["today_items"], 2)
+
+class V115OleTodayClassificationTests(unittest.TestCase):
+    def test_ole_today_includes_old_note_updated_today(self):
+        from editorial_agents.ole_today import build_ole_today
+        from editorial_agents.utils import TZ_AR
+        now = datetime(2026, 8, 2, 18, 30, tzinfo=TZ_AR)
+        items = [{
+            "titulo": "Una nota anterior que recibió una actualización relevante",
+            "url": "https://ole.test/actualizada",
+            "fecha_publicacion": (now - timedelta(days=1)).isoformat(),
+            "fecha_actualizacion": now.isoformat(),
+            "ole_origin": "ultimas",
+        }]
+        entries, _ = build_ole_today(items, [], [], now)
+        self.assertEqual(len(entries), 1)
+        self.assertTrue(entries[0]["updated_at"])
+
+    def test_ole_today_rejects_undated_deep_page(self):
+        from editorial_agents.ole_today import build_ole_today
+        from editorial_agents.utils import TZ_AR
+        now = datetime(2026, 8, 2, 18, 30, tzinfo=TZ_AR)
+        items = [{
+            "titulo": "Una noticia sin fecha recuperada desde una página profunda",
+            "url": "https://ole.test/profunda",
+            "ole_origin": "ultimas",
+            "ole_page": 5,
+        }]
+        entries, _ = build_ole_today(items, [], [], now)
+        self.assertEqual(entries, [])
