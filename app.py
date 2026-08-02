@@ -224,7 +224,11 @@ def page_now(data: dict) -> None:
     c3.metric("Recomendaciones", len(recs))
     c4.metric("Fuentes activas", f"{control.get('fuentes_ok','0')}/{control.get('fuentes_total','0')}")
 
-    urgent = [r for r in recs if as_int(r.get("Prioridad")) >= 60]
+    urgent = [
+        r for r in recs
+        if as_int(r.get("Prioridad")) >= 60
+        and r.get("Accion") in {"PUBLICAR AHORA", "ACTUALIZAR", "VERIFICAR"}
+    ]
     st.subheader("Que hacer ahora")
     if not urgent:
         st.info("No hay recomendaciones de prioridad alta en el ultimo corte.")
@@ -247,7 +251,8 @@ def page_assistant(data: dict) -> None:
 
     tab_recs, tab_opps, tab_reports = st.tabs(["Recomendaciones", "Temas para hacer", "Informes"])
     with tab_recs:
-        min_priority = st.slider("Prioridad minima", 0, 100, 45, 5)
+        st.info("Esta vista prioriza temas nuevos o que cambiaron desde el corte anterior. Los temas sin fecha o estables quedan para consulta, no como alerta.")
+        min_priority = st.slider("Prioridad minima", 0, 100, 60, 5)
         actions = sorted({row.get("Accion", "") for row in recs if row.get("Accion")})
         selected = st.multiselect("Acciones", actions)
         filtered = [
@@ -434,9 +439,13 @@ with st.sidebar:
     if st.button("Recargar pantalla", use_container_width=True):
         load_data.clear()
         st.rerun()
-    if st.button("Buscar noticias ahora", use_container_width=True):
-        ok, message = dispatch_workflow()
-        (st.success if ok else st.warning)(message)
+    github_ready = bool(_secret("GITHUB_TOKEN") and _secret("GITHUB_REPO"))
+    if github_ready:
+        if st.button("Buscar noticias ahora", use_container_width=True):
+            ok, message = dispatch_workflow()
+            (st.success if ok else st.warning)(message)
+    else:
+        st.caption("Actualizacion manual: GitHub > Actions > Monitor V9 > Run workflow.")
     st.caption("La busqueda y los agentes corren en GitHub. La app conserva el ultimo snapshot valido.")
 
 if not store.disponible():

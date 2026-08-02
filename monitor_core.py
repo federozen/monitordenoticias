@@ -2,6 +2,7 @@
 Scraping, clustering, tendencias y agenda. Sin Streamlit: lo importan
 app.py (interfaz) y vigia.py (corridas automáticas en GitHub Actions)."""
 import re
+import os
 import json
 import random
 import unicodedata
@@ -1415,7 +1416,7 @@ def _extraer_imagen_rss_item(item_raw: str) -> str:
     return ""
 
 CORE_VERSION = "núcleo v26 · publishers reales + snapshots online"
-MAX_ANTIGUEDAD_HORAS = 48  # notas de RSS/Google News más viejas que esto se descartan
+MAX_ANTIGUEDAD_HORAS = int(os.environ.get("MAX_ANTIGUEDAD_HORAS", "18") or 18)  # ventana editorial configurable
 
 
 def _fecha_item_rss(item) -> "datetime | None":
