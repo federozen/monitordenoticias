@@ -82,22 +82,24 @@ class EditorialAgentTests(unittest.TestCase):
         }
         discoveries = generate_discoveries(results, [], max_items=5)
         self.assertTrue(discoveries)
-        self.assertGreaterEqual(discoveries[0]["score"], 58)
+        self.assertGreaterEqual(discoveries[0]["score"], 48)
+        self.assertIn(discoveries[0]["status"], {"HALLAZGO FUERTE", "HALLAZGO"})
         self.assertIn(discoveries[0]["category"], {"HISTORIA RARA", "DATO O RECORD"})
+        self.assertNotIn("buena confianza", discoveries[0]["reason"].lower())
+        self.assertGreaterEqual(discoveries[0]["confidence"], 50)
 
-    def test_discovery_returns_best_candidates_even_below_strong_threshold(self):
+    def test_trusted_source_alone_does_not_create_a_finding(self):
         now = datetime.now(timezone.utc).isoformat()
         results = {
             "bbc": [{
-                "titulo": "European club changes its stadium access system for supporters",
-                "url": "https://example.com/stadium",
+                "titulo": "European club held a routine training session on Monday",
+                "url": "https://example.com/training",
                 "publisher_original": "BBC Sport",
                 "fecha_publicacion": now,
             }]
         }
         discoveries = generate_discoveries(results, [], max_items=5)
-        self.assertEqual(len(discoveries), 1)
-        self.assertIn(discoveries[0]["status"], {"HALLAZGO FUERTE", "CANDIDATO", "EXPLORAR"})
+        self.assertEqual(discoveries, [])
 
     def test_briefing_reports_only_real_delta(self):
         previous = [{
@@ -330,7 +332,7 @@ class V115OleAndSourcesTests(unittest.TestCase):
             items = monitor_core.fetch_ultimas_ole()
         meta = monitor_core.get_ole_fetch_meta()
         self.assertEqual(len(items), 2)
-        self.assertEqual(meta["status"], "completa")
+        self.assertEqual(meta["status"], "estimada")
         self.assertEqual(meta["pages"], 2)
         self.assertEqual(meta["today_items"], 2)
 
@@ -463,3 +465,56 @@ class V116VerifiedFreshnessTests(unittest.TestCase):
         }], [], [], now)
         self.assertEqual(entries, [])
         self.assertEqual(groups, [])
+
+
+class V12EditorialTrustTests(unittest.TestCase):
+    def test_recent_rss_archive_story_is_rejected_without_article_metadata(self):
+        from editorial_agents.desk import build_editorial_desk
+        from editorial_agents.utils import TZ_AR
+        now = datetime(2026, 8, 2, 19, 30, tzinfo=TZ_AR)
+        themes = [{
+            "cluster_id": "c_old_final",
+            "titulo": "Asi fue la final del Mundial que consagro al campeon",
+            "noticias": [{
+                "noticia": {
+                    "titulo": "Asi fue la final del Mundial que consagro al campeon",
+                    "fecha_publicacion": (now - timedelta(minutes=10)).isoformat(),
+                    "date_trust": "rss_publisher_timestamp",
+                },
+                "fuente": {"id": "medio", "nombre": "Medio"},
+            }],
+        }]
+        desk = build_editorial_desk(themes, [], [], [], [], now=now)
+        self.assertEqual(desk["topics"], [])
+
+    def test_historical_story_needs_a_new_information_hook(self):
+        from editorial_agents.desk import build_editorial_desk
+        from editorial_agents.utils import TZ_AR
+        now = datetime(2026, 8, 2, 19, 30, tzinfo=TZ_AR)
+        base = {
+            "cluster_id": "c_final_new",
+            "titulo": "Video inedito: un nuevo dato de la final del Mundial",
+            "noticias": [{
+                "noticia": {
+                    "titulo": "Video inedito: un nuevo dato de la final del Mundial",
+                    "fecha_publicacion": (now - timedelta(minutes=10)).isoformat(),
+                    "article_published_at": (now - timedelta(minutes=10)).isoformat(),
+                    "date_trust": "article_metadata",
+                },
+                "fuente": {"id": "medio", "nombre": "Medio"},
+            }],
+        }
+        desk = build_editorial_desk([base], [], [], [], [], now=now)
+        self.assertEqual(len(desk["topics"]), 1)
+
+    def test_ole_today_separates_published_and_updated(self):
+        from editorial_agents.ole_today import build_ole_today
+        from editorial_agents.utils import TZ_AR
+        now = datetime(2026, 8, 2, 19, 30, tzinfo=TZ_AR)
+        items = [
+            {"titulo": "Nota nueva", "url": "https://ole.test/nueva", "fecha_publicacion": now.isoformat(), "date_trust": "article_metadata", "ole_origin": "ultimas"},
+            {"titulo": "Nota vieja actualizada", "url": "https://ole.test/actualizada", "fecha_publicacion": (now - timedelta(days=1)).isoformat(), "fecha_actualizacion": now.isoformat(), "date_trust": "article_metadata", "ole_origin": "ultimas"},
+        ]
+        entries, groups = build_ole_today(items, [], [], now)
+        self.assertEqual({row["publication_type"] for row in entries}, {"PUBLICADA_HOY", "ACTUALIZADA_HOY"})
+        self.assertEqual(sum(row["piece_count"] for row in groups), 2)
