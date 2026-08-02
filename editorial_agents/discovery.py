@@ -199,8 +199,24 @@ def _collect(results: dict, source_map: dict, max_age_hours: int) -> list[dict]:
             if len(title) < 18:
                 continue
             published = _parse_date(news.get("fecha_publicacion", ""))
-            age = (now - published).total_seconds() / 3600 if published else None
-            if age is not None and age > max_age_hours:
+            source_url = str(source.get("url") or "")
+            channel = str(news.get("discovery_channel") or "")
+            trust = str(news.get("date_trust") or "")
+            if not trust:
+                is_gnews = (
+                    channel.lower() == "google news"
+                    or "news.google.com" in source_url
+                    or source_id.startswith("gn_")
+                )
+                trust = "discovery_timestamp" if is_gnews else "publisher_timestamp"
+            # Un hallazgo no puede presentarse como actual si solo conocemos la
+            # hora en que Google News lo descubrió. Las historias sin fecha o con
+            # timestamp de agregador quedan fuera hasta que exista una fuente
+            # directa fechada.
+            if published is None or trust in {"discovery_timestamp", "missing", "unverified"}:
+                continue
+            age = (now - published).total_seconds() / 3600
+            if age > max_age_hours:
                 continue
             items.append({
                 "source_id": source_id,
@@ -210,6 +226,7 @@ def _collect(results: dict, source_map: dict, max_age_hours: int) -> list[dict]:
                 "url": news.get("url", ""),
                 "published_at": news.get("fecha_publicacion", ""),
                 "age_hours": age,
+                "date_trust": trust,
             })
     return items
 
@@ -299,6 +316,7 @@ def generate(results: dict, ole_items: list[dict] | None, previous: list[dict] |
             "media_count": len(publishers),
             "published_at": representative.get("published_at", ""),
             "age_hours": representative.get("age_hours"),
+            "date_trust": representative.get("date_trust", "publisher_timestamp"),
             "is_new": is_new,
             "grew": grew,
             "ole_status": "NO_CUBIERTO" if float(match.get("score", 0) or 0) < 0.38 else "REVISAR_COINCIDENCIA",

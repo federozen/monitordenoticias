@@ -73,61 +73,91 @@ def _evidence_from_theme(row: dict) -> list[dict]:
             continue
         news = item.get("noticia") if isinstance(item.get("noticia"), dict) else item
         source = item.get("fuente") if isinstance(item.get("fuente"), dict) else {}
+        source_id = str(news.get("source_id") or source.get("id") or "")
+        discovery_channel = str(news.get("discovery_channel") or "")
+        source_url = str(source.get("url") or "")
+        date_trust = str(news.get("date_trust") or "")
+        if not date_trust:
+            is_gnews = (
+                discovery_channel.lower() == "google news"
+                or "news.google.com" in source_url
+                or source_id.startswith("gn_")
+            )
+            date_trust = "discovery_timestamp" if is_gnews else "publisher_timestamp"
         out.append({
             "publisher": str(news.get("publisher_original") or news.get("fuente") or source.get("nombre") or "Fuente"),
             "title": str(news.get("titulo") or news.get("title") or ""),
             "url": str(news.get("url") or ""),
             "published_at": str(news.get("fecha_publicacion") or news.get("fecha") or ""),
+            "source_id": source_id,
+            "discovery_channel": discovery_channel,
+            "date_trust": date_trust,
         })
     return out
 
 
 
 
-def _activity_dates(row: dict) -> list[datetime]:
+def _activity_dates(row: dict, trusted_only: bool = False) -> list[datetime]:
     dates: list[datetime] = []
     for item in _evidence_from_theme(row):
+        trust = str(item.get("date_trust") or "").lower()
+        if trusted_only and trust in {"discovery_timestamp", "missing", "unverified"}:
+            continue
         dt = parse_datetime(item.get("published_at"))
         if dt:
             dates.append(dt)
-    for key in ("published_at", "FechaPublicacion", "fecha_publicacion", "updated_at", "FechaActualizacion"):
-        dt = parse_datetime(row.get(key))
-        if dt:
-            dates.append(dt)
+    # Fechas a nivel de tema son confiables solo si fueron calculadas por el
+    # publisher o por metadata de artículo. Un timestamp agregado por Google
+    # News no debe ascender aquí como fecha editorial.
+    row_trust = str(row.get("date_trust") or row.get("DateTrust") or "").lower()
+    if not trusted_only or row_trust not in {"discovery_timestamp", "missing", "unverified"}:
+        for key in ("published_at", "FechaPublicacion", "fecha_publicacion", "updated_at", "FechaActualizacion"):
+            dt = parse_datetime(row.get(key))
+            if dt:
+                dates.append(dt)
     return dates
 
 
 def _is_in_cut(row: dict, change: dict | None, start: datetime, now: datetime) -> tuple[bool, str]:
     """Decide si un tema pertenece realmente al corte de cuatro horas.
 
-    No alcanza con que siga en una portada. Se exige una publicacion fechada
-    dentro de la ventana o una deteccion genuinamente nueva sin fecha.
+    Regla estricta: una primera detección no equivale a una publicación nueva.
+    Solo se acepta una historia con al menos una fecha confiable del publisher
+    dentro de la ventana. Esto evita que portadas, buscadores o Google News
+    reciclen notas de hace días o semanas como si fueran actuales.
     """
     title = _title(row)
     explicit = explicit_date_in_text(title, now)
     if explicit is not None and explicit.date() < start.date():
         return False, "FECHA EXPLICITA ANTERIOR"
 
-    dates = _activity_dates(row)
-    if dates:
-        latest = max(dates)
-        return (start <= latest <= now + timedelta(minutes=10), "FECHA EN VENTANA" if start <= latest <= now + timedelta(minutes=10) else "FUERA DE VENTANA")
+    trusted_dates = _activity_dates(row, trusted_only=True)
+    if trusted_dates:
+        latest = max(trusted_dates)
+        inside = start <= latest <= now + timedelta(minutes=10)
+        return inside, "FECHA VERIFICADA EN VENTANA" if inside else "FUERA DE VENTANA"
 
-    change_type = str((change or {}).get("change_type") or (change or {}).get("TipoCambio") or "").upper()
-    is_new = change_type.startswith("NUEVO") or str(row.get("nuevo") or row.get("Nuevo") or "").strip().lower() in {"true", "si", "sí", "1"}
-    if is_new and not row.get("_carried_from_previous"):
-        return True, "NUEVO SIN FECHA VERIFICABLE"
-    return False, "SIN FECHA NI NOVEDAD"
+    any_dates = _activity_dates(row, trusted_only=False)
+    if any_dates:
+        return False, "SOLO FECHA DE DESCUBRIMIENTO NO VERIFICADA"
+
+    # Antes se aceptaba cualquier cluster marcado como nuevo aunque no tuviera
+    # fecha. Ese atajo fue el que dejó entrar historias viejas del Mundial y de
+    # aniversarios de Scaloni. En el resumen 4H se excluyen sin excepción.
+    return False, "SIN FECHA VERIFICABLE"
 
 
 def _discovery_in_cut(discovery: dict, start: datetime, now: datetime) -> bool:
     explicit = explicit_date_in_text(_title(discovery), now)
     if explicit is not None and explicit.date() < start.date():
         return False
+    trust = str(discovery.get("date_trust") or discovery.get("DateTrust") or "publisher_timestamp").lower()
+    if trust in {"discovery_timestamp", "missing", "unverified"}:
+        return False
     dt = parse_datetime(discovery.get("published_at") or discovery.get("FechaPublicacion"))
-    if dt:
-        return start <= dt <= now + timedelta(minutes=10)
-    return str(discovery.get("is_new") or discovery.get("EsNuevo") or "").strip().lower() in {"true", "si", "sí", "1"}
+    return bool(dt and start <= dt <= now + timedelta(minutes=10))
+
 
 def _source_line(evidence: list[dict], max_items: int = 5) -> tuple[str, str]:
     publishers = unique_strings([str(item.get("publisher") or "") for item in evidence if item.get("publisher")])[:max_items]
@@ -401,5 +431,9 @@ def build_editorial_desk(themes: list[dict], changes: list[dict], recommendation
         "snapshot_preserved": bool((cut_quality or {}).get("preserve_previous")),
         "carried_topic_count": sum(1 for item in selected if item.get("origin") == "PANORAMA PREVIO"),
         "excluded_outside_window": len(exclusion_reasons),
+        "excluded_unverified_date": sum(
+            1 for reason in exclusion_reasons.values()
+            if "VERIFIC" in reason or "DESCUBRIMIENTO" in reason
+        ),
     }
     return {"topics": selected, "actions": actions, "meta": meta}

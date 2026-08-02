@@ -88,32 +88,30 @@ def _first_seen_map(previous: list[dict] | None) -> dict[str, str]:
 
 
 def _belongs_to_today(item: dict, title: str, first_seen_value: str, now: datetime) -> bool:
-    """Filtra la vista editorial: OLE_HOY debe ser de hoy, no la memoria de cobertura."""
+    """Filtra OLE_HOY con una regla estricta de fecha editorial.
+
+    La fecha de primera detección no prueba que una nota haya sido publicada hoy:
+    una portada o Google News puede resucitar una pieza vieja. Solo entran notas
+    con publicación o actualización fechada en el día actual.
+    """
     published = parse_datetime(item.get("fecha_publicacion") or item.get("fecha"))
     updated = parse_datetime(item.get("fecha_actualizacion") or item.get("actualizado"))
     explicit = explicit_date_in_text(title, now)
+    origin = str(item.get("ole_origin") or item.get("origen_ole") or "").lower()
 
-    # Una fecha escrita en el titulo tiene prioridad para eliminar servicios viejos.
+    # Una fecha escrita en el título manda sobre cualquier hora de descubrimiento.
     if explicit is not None and explicit.date() != now.date():
         return False
+
+    # Google News se conserva para comparar cobertura, pero su hora es una hora
+    # de descubrimiento/indexación y no alcanza para afirmar que Olé publicó hoy.
+    if origin == "gnews":
+        return False
+
     if published is not None and published.date() == now.date():
         return True
     if updated is not None and updated.date() == now.date():
         return True
-    if published is not None or updated is not None:
-        return False
-
-    # Las entradas de /ultimas-noticias sin metadata se aceptan solo en las
-    # primeras páginas y si fueron detectadas hoy. Es una red de seguridad:
-    # evita que una paginación sin fechas mezcle notas viejas con Olé Hoy.
-    origin = str(item.get("ole_origin") or item.get("origen_ole") or "").lower()
-    first_seen_dt = parse_datetime(first_seen_value)
-    try:
-        page = int(item.get("ole_page") or 1)
-    except Exception:
-        page = 1
-    if origin == "ultimas" and page <= 2:
-        return first_seen_dt is None or first_seen_dt.date() == now.date()
     return False
 
 
