@@ -201,3 +201,38 @@ class V11DeskTests(unittest.TestCase):
         ])
         self.assertEqual(rows[0]["editorial_state"], "DEMORADA")
         self.assertEqual(rows[-1]["editorial_state"], "SALUDABLE")
+
+class V113CutQualityTests(unittest.TestCase):
+    def test_degraded_cut_preserves_previous_panorama(self):
+        from editorial_agents.cut_quality import assess, merge_with_previous
+        states = []
+        for idx in range(73):
+            states.append({
+                "id": f"s{idx}",
+                "estado": "ok" if idx < 22 else "error",
+                "noticias": 5 if idx < 22 else 0,
+                "canal": "Google News" if idx >= 25 else "RSS",
+                "error": "503 Service Unavailable" if idx >= 22 else "",
+            })
+        quality = assess(states)
+        self.assertEqual(quality["state"], "DEGRADADO")
+        self.assertTrue(quality["preserve_previous"])
+        current = [{"cluster_id": "c_current", "titulo": "Tema nuevo", "cant_medios": 2}]
+        previous = [
+            {"ClusterID": "c_current", "Titulo": "Tema nuevo", "Medios": "3"},
+            {"ClusterID": "c_old", "Titulo": "Tema conservado", "Medios": "4", "TieneOle": "si", "Fuentes": []},
+        ]
+        merged = merge_with_previous(current, previous)
+        self.assertEqual(len(merged), 2)
+        carried = [row for row in merged if row.get("cluster_id") == "c_old"][0]
+        self.assertTrue(carried.get("_carried_from_previous"))
+
+    def test_complete_cut_can_replace_snapshot(self):
+        from editorial_agents.cut_quality import assess
+        states = [
+            {"id": f"s{idx}", "estado": "ok" if idx < 60 else "error", "noticias": 5 if idx < 60 else 0, "canal": "RSS"}
+            for idx in range(73)
+        ]
+        quality = assess(states)
+        self.assertEqual(quality["state"], "COMPLETO")
+        self.assertFalse(quality["preserve_previous"])
