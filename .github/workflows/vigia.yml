@@ -1,4 +1,4 @@
-name: Monitor V10 - resumen y hallazgos
+name: Monitor V11 - mesa editorial
 
 on:
   schedule:
@@ -10,7 +10,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: monitor-editorial-v10
+  group: monitor-editorial-v11
   cancel-in-progress: false
 
 jobs:
@@ -26,7 +26,7 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-vigia.txt
       - run: pip install -r requirements-vigia.txt
-      - name: Buscar, comparar con Ole y generar hallazgos
+      - name: Actualizar mesa editorial, Ole Hoy y hallazgos
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           SHEET_ID: ${{ secrets.SHEET_ID }}
@@ -41,7 +41,9 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           AGENT_ENABLED: ${{ vars.AGENT_ENABLED || 'true' }}
           AGENT_TELEGRAM_MODE: ${{ vars.AGENT_TELEGRAM_MODE || 'off' }}
-          AGENT_HOURLY_DIGEST: ${{ vars.AGENT_HOURLY_DIGEST || 'true' }}
+          AGENT_FOUR_HOUR_DIGEST: ${{ vars.AGENT_FOUR_HOUR_DIGEST || 'true' }}
+          EDITORIAL_SUMMARY_MIN_TOPICS: ${{ vars.EDITORIAL_SUMMARY_MIN_TOPICS || '30' }}
+          EDITORIAL_SUMMARY_MAX_TOPICS: ${{ vars.EDITORIAL_SUMMARY_MAX_TOPICS || '40' }}
           AGENT_OPENING_HOUR: ${{ vars.AGENT_OPENING_HOUR || '8' }}
           AGENT_CLOSING_HOUR: ${{ vars.AGENT_CLOSING_HOUR || '23' }}
           AGENT_MAX_ALERTS: ${{ vars.AGENT_MAX_ALERTS || '4' }}
