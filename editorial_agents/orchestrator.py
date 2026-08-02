@@ -10,6 +10,9 @@ from .curator import curate
 from .discovery import generate as generate_discoveries
 from .executive import alert_message, build_report
 from .opportunities import generate as generate_opportunities
+from .desk import build_editorial_desk
+from .ole_today import build_ole_today
+from .source_health import build_source_editor_view
 from .utils import env_bool, env_int, now_ar, safe_html
 
 
@@ -56,6 +59,21 @@ def run(themes: list[dict], agenda: list[dict], source_health: list[dict], stora
     changes, briefing = build_briefing(
         enriched_themes, previous_themes or [], recommendations, discoveries, source_health
     )
+
+    # V11: mesa editorial legible. Se genera sin IA en cada corrida y se organiza
+    # en cortes de cuatro horas. El parte narrativo pago se produce solo desde
+    # Streamlit cuando el editor pulsa el boton correspondiente.
+    previous_ole = storage.leer_ole_hoy() if hasattr(storage, "leer_ole_hoy") else []
+    ole_today, ole_groups = build_ole_today(ole_coverage or [], previous_ole, recommendations, now)
+    social_items = storage.leer_buzon_social() if hasattr(storage, "leer_buzon_social") else []
+    editorial_desk = build_editorial_desk(
+        enriched_themes, changes, recommendations, discoveries, source_health,
+        social_items=social_items, now=now,
+        min_topics=env_int("EDITORIAL_SUMMARY_MIN_TOPICS", 30, 10, 50),
+        max_topics=env_int("EDITORIAL_SUMMARY_MAX_TOPICS", 40, 15, 60),
+    )
+    source_editor = build_source_editor_view(source_health)
+
     # El informe horario usa el resumen comparado: cuenta cambios y hallazgos,
     # no repite el inventario completo del monitor.
     report["title"] = briefing.get("title", report.get("title", "RESUMEN EDITORIAL"))
@@ -67,6 +85,8 @@ def run(themes: list[dict], agenda: list[dict], source_health: list[dict], stora
     storage.guardar_agente_snapshot(recommendations, discoveries, opportunities)
     if hasattr(storage, "guardar_briefing_snapshot"):
         storage.guardar_briefing_snapshot(changes, briefing)
+    if hasattr(storage, "guardar_mesa_editorial"):
+        storage.guardar_mesa_editorial(editorial_desk, ole_today, ole_groups, source_editor)
     storage.registrar_informe(report)
 
     mode = _telegram_mode()
@@ -103,10 +123,11 @@ def run(themes: list[dict], agenda: list[dict], source_health: list[dict], stora
                 storage.registrar_avisos_descubrimiento(selected_disc)
 
     if send_telegram and mode in {"digest", "full"}:
-        hourly = env_bool("AGENT_HOURLY_DIGEST", True)
-        report_key = f"{report_type}:{now.strftime('%Y-%m-%d-%H')}"
-        due = (hourly or report_type in {"OPENING", "CLOSING"}) and not storage.aviso_reciente(
-            report_key, "REPORT", 20
+        four_hour = env_bool("AGENT_FOUR_HOUR_DIGEST", True)
+        due_hour = now.hour in {0, 4, 8, 12, 16, 20}
+        report_key = f"4H:{now.strftime('%Y-%m-%d-%H')}"
+        due = (four_hour and due_hour) and not storage.aviso_reciente(
+            report_key, "REPORT", 180
         )
         if due and send_telegram(report["telegram_html"], html=True, silencioso=True):
             sent_report = True
@@ -114,7 +135,7 @@ def run(themes: list[dict], agenda: list[dict], source_health: list[dict], stora
 
     duration = round(time.perf_counter() - start, 3)
     storage.registrar_agent_log({
-        "agent": "orchestrator_v9_2",
+        "agent": "orchestrator_v11",
         "status": "ok",
         "duration_seconds": duration,
         "recommendations": len(recommendations),
@@ -131,6 +152,9 @@ def run(themes: list[dict], agenda: list[dict], source_health: list[dict], stora
         "report": report,
         "changes": changes,
         "briefing": briefing,
+        "editorial_desk": editorial_desk,
+        "ole_today": ole_today,
+        "ole_coverage_groups": ole_groups,
         "alerts_sent": sent_alerts,
         "report_sent": sent_report,
         "duration_seconds": duration,
