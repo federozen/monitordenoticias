@@ -21,7 +21,7 @@ import sheets_memoria
 TZ_AR = timezone(timedelta(hours=-3))
 
 st.set_page_config(
-    page_title="Monitor Deportivo V11",
+    page_title="Monitor Deportivo V12",
     page_icon="MD",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -181,6 +181,8 @@ def render_recommendation(row: dict, idx: int, compact: bool = False) -> None:
             )
             if row.get("Motivo"):
                 st.write(row.get("Motivo"))
+            if row.get("MotivoConfianza"):
+                st.caption(f"Confianza de la evidencia: {row.get('MotivoConfianza')}")
             if row.get("TituloOle"):
                 st.markdown(
                     "**Coincidencia detectada en Ole:** " +
@@ -224,14 +226,17 @@ def render_discovery(row: dict, idx: int, compact: bool = False) -> None:
                 unsafe_allow_html=True,
             )
             st.caption(
-                f"{row.get('Estado') or row.get('Categoria','HALLAZGO')} | {row.get('Categoria','')} | score {row.get('Score','0')}/100 | "
-                f"valor Argentina {row.get('ValorArgentina','0')}/100 | "
+                f"{row.get('Estado') or row.get('Categoria','HALLAZGO')} | {row.get('Categoria','')} | "
+                f"noticiabilidad {row.get('Score','0')}/100 | valor Argentina {row.get('ValorArgentina','0')}/100 | "
+                f"confianza {row.get('Confianza','0')}/100 | {row.get('SenalesEditoriales','0')} señal(es) editoriales | "
                 f"{row.get('Medios','0')} publishers"
             )
             if row.get("PorQueImporta"):
                 st.write(f"**Por que puede importar:** {row.get('PorQueImporta')}")
             if row.get("Motivo"):
                 st.write(row.get("Motivo"))
+            if row.get("MotivoConfianza"):
+                st.caption(f"Confianza de la evidencia: {row.get('MotivoConfianza')}")
             if row.get("Angulo"):
                 st.write(f"**Enfoque sugerido:** {row.get('Angulo')}")
             if row.get("Formato"):
@@ -338,7 +343,7 @@ def page_now(data: dict) -> None:
     discoveries = data["discoveries"]
     sources = data["sources"]
 
-    st.title("Monitor Deportivo V11")
+    st.title("Monitor Deportivo V12")
     st.caption("Un resumen del corte, los cambios concretos para agregar y un radar de hallazgos que evita navegar fuente por fuente.")
     render_cut_quality(control)
     last = control.get("ultima_actualizacion", "Sin datos")
@@ -347,12 +352,13 @@ def page_now(data: dict) -> None:
         if row.get("Accion") in {"PUBLICAR AHORA", "ACTUALIZAR", "VERIFICAR"}
         and as_int(row.get("Prioridad")) >= 60
     ]
-    strong_findings = [d for d in discoveries if (d.get("Estado") or "") in {"HALLAZGO FUERTE", "CANDIDATO"}]
+    strong_findings = [d for d in discoveries if (d.get("Estado") or "") in {"HALLAZGO FUERTE", "HALLAZGO"}]
+    exploratory_candidates = [d for d in discoveries if (d.get("Estado") or "") == "CANDIDATO"]
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Ultima actualizacion", last.replace("T", " ")[:19])
     c2.metric("Cambios accionables", len(actionable_changes))
-    c3.metric("Hallazgos y candidatos", len(strong_findings))
+    c3.metric("Hallazgos", len(strong_findings), delta=f"{len(exploratory_candidates)} candidato(s)")
     c4.metric("Fuentes activas", f"{control.get('fuentes_ok','0')}/{control.get('fuentes_total','0')}")
 
     st.subheader(summary.get("Titulo") or "Resumen del corte")
@@ -373,12 +379,16 @@ def page_now(data: dict) -> None:
             render_change(row, idx)
 
     with tab_findings:
-        st.subheader("Historias para descubrir")
-        st.caption("Siempre muestra los mejores candidatos internacionales del corte, aunque ninguno alcance la categoria de hallazgo fuerte.")
-        if not discoveries:
-            st.warning("No hubo material internacional util en las fuentes del corte. Revisa V9_Fuentes y los radares de descubrimiento.")
-        for idx, row in enumerate(discoveries[:15]):
+        st.subheader("Hallazgos internacionales")
+        st.caption("Solo aparecen historias con señales editoriales concretas. La confiabilidad de la fuente se muestra aparte y no convierte por sí sola una noticia en hallazgo.")
+        if not strong_findings:
+            st.info("No hubo hallazgos firmes en este corte.")
+        for idx, row in enumerate(strong_findings[:15]):
             render_discovery(row, idx, compact=True)
+        if exploratory_candidates:
+            with st.expander(f"Candidatos para explorar ({len(exploratory_candidates)})"):
+                for idx, row in enumerate(exploratory_candidates[:15]):
+                    render_discovery(row, 500 + idx, compact=True)
 
     with tab_panorama:
         st.caption("Inventario amplio para consultar. No equivale a una lista de temas para publicar.")
@@ -393,7 +403,7 @@ def page_now(data: dict) -> None:
             st.write(f"**{source.get('Fuente')}** - {source.get('Error') or 'sin noticias'}")
 
 def page_assistant(data: dict) -> None:
-    st.title("Asistente editorial V10")
+    st.title("Asistente editorial V12")
     recs = data["recommendations"]
     discoveries = data["discoveries"]
     opportunities = data["opportunities"]
@@ -413,7 +423,7 @@ def page_assistant(data: dict) -> None:
     with tab_disc:
         min_score = st.slider("Score minimo de descubrimiento", 0, 100, 55, 5)
         filtered = [d for d in discoveries if as_int(d.get("Score")) >= min_score]
-        st.caption(f"{len(filtered)} hallazgos")
+        st.caption(f"{sum(1 for d in filtered if d.get('Estado') in {'HALLAZGO FUERTE', 'HALLAZGO'})} hallazgos · {sum(1 for d in filtered if d.get('Estado') == 'CANDIDATO')} candidatos")
         for idx, row in enumerate(filtered[:60]):
             render_discovery(row, 2000 + idx)
 
@@ -679,20 +689,27 @@ def page_desk(data: dict) -> None:
             return parsed.astimezone(TZ_AR).date()
         except Exception:
             return None
-    ole_published_today = sum(1 for row in ole_today if _row_date(row.get("FechaPublicacion")) == today_ar)
+    ole_published_today = sum(
+        1 for row in ole_today
+        if (row.get("Tipo") == "PUBLICADA_HOY")
+        or (not row.get("Tipo") and _row_date(row.get("FechaPublicacion")) == today_ar)
+    )
     ole_updated_only = sum(
         1 for row in ole_today
-        if _row_date(row.get("FechaActualizacion")) == today_ar
-        and _row_date(row.get("FechaPublicacion")) != today_ar
+        if (row.get("Tipo") == "ACTUALIZADA_HOY")
+        or (not row.get("Tipo") and _row_date(row.get("FechaActualizacion")) == today_ar
+            and _row_date(row.get("FechaPublicacion")) != today_ar)
     )
+    discovery_rows = data.get("discoveries") or []
+    candidates = [row for row in discovery_rows if row.get("Estado") == "CANDIDATO"]
     source_rows = data.get("sources_editor") or []
-    st.title("Mesa editorial V11")
+    st.title("Mesa editorial V12")
     st.caption("Una sola pantalla para saber qué pasó, qué cambió, qué publicó Olé, qué falta y qué conviene seguir.")
     render_cut_quality(data.get("control") or {})
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Temas del corte", len(rows))
     c2.metric("Acciones pendientes", len(actions))
-    c3.metric("Hallazgos", len(findings))
+    c3.metric("Hallazgos", len(findings), delta=f"{len(candidates)} candidato(s)")
     ole_status = str((data.get("control") or {}).get("ole_cobertura_dia") or "").strip().lower()
     ole_pages = (data.get("control") or {}).get("ole_paginas_revisadas") or ""
     ole_metric_delta = f"{ole_updated_only} actualizada(s) · {ole_pages} pág." if ole_pages else f"{ole_updated_only} actualizada(s)"
@@ -719,7 +736,8 @@ def page_desk(data: dict) -> None:
         ole_status = str(control.get("ole_cobertura_dia") or "").strip().lower()
         ole_detail = (
             f"{control.get('ole_paginas_revisadas','')} páginas revisadas · "
-            f"{control.get('ole_notas_listado','')} notas recuperadas"
+            f"{control.get('ole_notas_listado','')} piezas verificadas · "
+            f"{control.get('ole_sitemap_agregadas','0')} agregadas por sitemap"
         ).strip(" ·")
         ole_range = ""
         if control.get("ole_primera_nota_hoy") or control.get("ole_ultima_nota_hoy"):
@@ -736,6 +754,7 @@ def page_desk(data: dict) -> None:
             st.warning(f"Cobertura de Olé parcial: {ole_detail}{ole_range}. Puede faltar parte del día.")
         for group in ole_coverage[:40]:
             with st.expander(f"{group.get('Tema','')} · {group.get('Piezas','0')} pieza(s)"):
+                st.write(f"**Publicadas hoy:** {group.get('PublicadasHoy','0')} · **Actualizadas hoy:** {group.get('ActualizadasHoy','0')}")
                 st.write(f"**Enfoques:** {group.get('Enfoques','')}")
                 st.write(f"**Acción:** {group.get('Accion','')}")
                 if is_yes(group.get("Sobrecobertura")):
@@ -748,15 +767,24 @@ def page_desk(data: dict) -> None:
             st.dataframe(ole_today[:200], use_container_width=True, hide_index=True)
     with tabs[3]:
         if not findings:
-            st.info("No hay hallazgos en este corte. El resumen general sigue disponible.")
+            st.info("No hay hallazgos firmes en este corte.")
         for row in findings[:30]:
             with st.container(border=True):
                 st.markdown(f"### {_row_link(row.get('Tema',''), row.get('URLPrincipal',''))}", unsafe_allow_html=True)
-                st.caption(f"Prioridad {row.get('Prioridad','')} | {row.get('Accion','')} | Olé: {row.get('EstadoOle','')}")
+                st.caption(
+                    f"{row.get('Estado','HALLAZGO')} | {row.get('Categoria','')} | prioridad {row.get('Prioridad','')} | "
+                    f"confianza {row.get('Confianza','0')} | {row.get('SenalesEditoriales','0')} señal(es) | Olé: {row.get('EstadoOle','')}"
+                )
                 st.write(row.get("QuePaso", ""))
                 if row.get("PorQueImporta"):
                     st.write(f"**Valor para Argentina:** {row.get('PorQueImporta')}")
+                if row.get("MotivoConfianza"):
+                    st.caption(f"Confianza: {row.get('MotivoConfianza')}")
                 st.caption(f"Fuentes: {row.get('Fuentes','')}")
+        if candidates:
+            with st.expander(f"Candidatos para explorar ({len(candidates)})"):
+                for idx, row in enumerate(candidates[:30]):
+                    render_discovery(row, 8000 + idx, compact=True)
     with tabs[4]:
         broken = [row for row in source_rows if row.get("Estado") != "SALUDABLE"]
         st.metric("Fuentes que requieren atención", len(broken))
@@ -872,7 +900,7 @@ def page_config(data: dict) -> None:
 
 
 with st.sidebar:
-    st.header("Monitor V11")
+    st.header("Monitor V12")
     page = st.radio(
         "Ir a",
         ["Mesa editorial", "Buzón social", "Ahora técnico", "Asistente", "Explorar", "Producir", "Predictivo", "Configuracion"],

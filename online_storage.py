@@ -47,7 +47,8 @@ RECOMENDACIONES_HEADERS = [
     "Publishers", "TieneOle", "Momentum", "EsNuevo", "FuentesOficiales", "Motivo", "EvidenciaJSON",
 ]
 DESCUBRIMIENTOS_HEADERS = [
-    "RunTS", "DiscoveryID", "Categoria", "Estado", "Score", "ValorArgentina", "Titulo", "URL",
+    "RunTS", "DiscoveryID", "Categoria", "Estado", "Score", "ValorArgentina",
+    "Confianza", "MotivoConfianza", "SenalesEditoriales", "Titulo", "URL",
     "Publishers", "Medios", "FechaPublicacion", "AntiguedadHoras", "EsNuevo",
     "EstadoOle", "TituloOle", "URLOle", "Motivo", "PorQueImporta", "Angulo", "Formato", "EvidenciaJSON",
 ]
@@ -81,18 +82,19 @@ ACCIONES_EDITOR_HEADERS = [
     "DatoNuevo", "NotaOle", "URLOle", "Fuentes", "URLsFuentes", "Actualizado", "Notas"
 ]
 OLE_HOY_HEADERS = [
-    "OleID", "PrimeraDeteccion", "UltimaDeteccion", "FechaPublicacion", "FechaActualizacion",
-    "Seccion", "TemaID", "TemaAgrupado", "Enfoque", "Titulo", "URL", "Entidades",
-    "NovedadesExternas", "AccionSugerida"
+    "OleID", "PrimeraDeteccion", "UltimaDeteccion", "Tipo", "FechaPublicacion", "FechaActualizacion",
+    "ConfianzaFecha", "Pagina", "Origen", "Seccion", "TemaID", "TemaAgrupado", "Enfoque",
+    "Titulo", "URL", "Entidades", "NovedadesExternas", "AccionSugerida"
 ]
 COBERTURA_OLE_EDITOR_HEADERS = [
-    "TemaID", "Tema", "Piezas", "Secciones", "Enfoques", "PrimeraDeteccion",
-    "UltimaDeteccion", "UltimoTitulo", "UltimaURL", "TitulosPublicados",
+    "TemaID", "Tema", "Piezas", "PublicadasHoy", "ActualizadasHoy", "Secciones", "Enfoques",
+    "PrimeraDeteccion", "UltimaDeteccion", "UltimoTitulo", "UltimaURL", "TitulosPublicados",
     "NovedadesExternas", "Accion", "Sobrecobertura"
 ]
 HALLAZGOS_EDITOR_HEADERS = [
-    "Corte", "Prioridad", "Tema", "QuePaso", "PorQueImporta", "EstadoOle",
-    "Accion", "Fuentes", "URLsFuentes", "URLPrincipal"
+    "Corte", "Estado", "Categoria", "Prioridad", "Confianza", "SenalesEditoriales",
+    "Tema", "QuePaso", "PorQueImporta", "MotivoConfianza", "EstadoOle", "Accion",
+    "Fuentes", "URLsFuentes", "URLPrincipal"
 ]
 FUENTES_EDITOR_HEADERS = [
     "FuenteID", "Fuente", "Zona", "MetodoActivo", "Estado", "Noticias",
@@ -483,7 +485,8 @@ def guardar_agente_snapshot(recommendations: list[dict], discoveries: list[dict]
     for item in discoveries:
         discovery_rows.append([
             now, item.get("discovery_id", ""), item.get("category", ""), item.get("status", ""),
-            item.get("score", 0), item.get("value_argentina", 0), item.get("title", ""),
+            item.get("score", 0), item.get("value_argentina", 0), item.get("confidence", 0),
+            item.get("confidence_reason", ""), item.get("editorial_signal_count", 0), item.get("title", ""),
             item.get("url", ""), " | ".join(item.get("publishers", []) or []),
             item.get("media_count", 0), item.get("published_at", ""),
             item.get("age_hours", ""), item.get("is_new", False),
@@ -829,7 +832,8 @@ def guardar_mesa_editorial(desk: dict, ole_entries: list[dict], ole_coverage: li
 
     ole_rows = [[
         item.get("ole_id", ""), item.get("first_seen", ""), item.get("last_seen", ""),
-        item.get("published_at", ""), item.get("updated_at", ""), item.get("section", ""),
+        item.get("publication_type", ""), item.get("published_at", ""), item.get("updated_at", ""),
+        item.get("date_trust", ""), item.get("page", ""), item.get("origin", ""), item.get("section", ""),
         item.get("topic_id", ""), item.get("topic", ""), item.get("focus", ""),
         item.get("title", ""), item.get("url", ""), " | ".join(item.get("entities", []) or []),
         " | ".join(item.get("related_external", []) or []), item.get("suggested_action", ""),
@@ -837,6 +841,7 @@ def guardar_mesa_editorial(desk: dict, ole_entries: list[dict], ole_coverage: li
 
     coverage_rows = [[
         item.get("topic_id", ""), item.get("topic", ""), item.get("piece_count", 0),
+        item.get("published_count", 0), item.get("updated_count", 0),
         " | ".join(item.get("sections", []) or []), " | ".join(item.get("focuses", []) or []),
         item.get("first_seen", ""), item.get("last_seen", ""), item.get("last_title", ""),
         item.get("last_url", ""), " || ".join(item.get("titles", []) or []),
@@ -845,9 +850,11 @@ def guardar_mesa_editorial(desk: dict, ole_entries: list[dict], ole_coverage: li
     ] for item in ole_coverage or []]
 
     hallazgo_rows = [[
-        item.get("cut_key", cut_key), item.get("priority", 0), item.get("topic", ""),
-        item.get("what_happened", ""), item.get("why_it_matters", ""), item.get("ole_status", ""),
-        item.get("action", ""), item.get("sources", ""), item.get("source_urls", ""), item.get("url", ""),
+        item.get("cut_key", cut_key), item.get("finding_status", "HALLAZGO"), item.get("finding_category", ""),
+        item.get("priority", 0), item.get("confidence", 0), item.get("editorial_signal_count", 0),
+        item.get("topic", ""), item.get("what_happened", ""), item.get("why_it_matters", ""),
+        item.get("confidence_reason", ""), item.get("ole_status", ""), item.get("action", ""),
+        item.get("sources", ""), item.get("source_urls", ""), item.get("url", ""),
     ] for item in topics if item.get("section") in {"HALLAZGOS", "BUZON SOCIAL"}]
 
     source_values = [[
@@ -866,9 +873,9 @@ def guardar_mesa_editorial(desk: dict, ole_entries: list[dict], ole_coverage: li
     }
     _format_editorial_sheet("RESUMEN_4H", [110, 125, 125, 65, 115, 145, 300, 420, 360, 360, 155, 260, 230, 125, 80, 75, 240, 240, 230, 145], {"red": 0.07, "green": 0.35, "blue": 0.65})
     _format_editorial_sheet("ACCIONES", [160, 110, 80, 120, 110, 140, 320, 380, 260, 230, 220, 220, 150, 260], {"red": 0.78, "green": 0.25, "blue": 0.12})
-    _format_editorial_sheet("OLE_HOY", [150, 145, 145, 140, 140, 130, 140, 300, 130, 360, 240, 180, 360, 180], {"red": 0.1, "green": 0.55, "blue": 0.22})
-    _format_editorial_sheet("COBERTURA_OLE", [150, 320, 70, 180, 180, 145, 145, 320, 230, 480, 420, 180, 110], {"red": 0.1, "green": 0.55, "blue": 0.22})
-    _format_editorial_sheet("HALLAZGOS", [110, 80, 320, 420, 400, 150, 120, 240, 240, 230], {"red": 0.55, "green": 0.2, "blue": 0.7})
+    _format_editorial_sheet("OLE_HOY", [150, 145, 145, 130, 140, 140, 130, 80, 110, 130, 140, 300, 130, 360, 240, 180, 360, 180], {"red": 0.1, "green": 0.55, "blue": 0.22})
+    _format_editorial_sheet("COBERTURA_OLE", [150, 320, 70, 90, 90, 180, 180, 145, 145, 320, 230, 480, 420, 180, 110], {"red": 0.1, "green": 0.55, "blue": 0.22})
+    _format_editorial_sheet("HALLAZGOS", [110, 120, 150, 80, 90, 90, 320, 420, 400, 260, 150, 120, 240, 240, 230], {"red": 0.55, "green": 0.2, "blue": 0.7})
     _format_editorial_sheet("FUENTES_EDITOR", [120, 230, 120, 150, 210, 80, 155, 360, 360], {"red": 0.35, "green": 0.35, "blue": 0.35})
     return counts
 

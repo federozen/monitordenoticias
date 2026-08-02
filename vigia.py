@@ -148,7 +148,7 @@ def enviar_telegram(texto: str, html: bool = True, silencioso: bool = False) -> 
 def main():
     simulacro = not mem.disponible()
     legacy_memory = os.environ.get("LEGACY_MEMORY_WRITES_ENABLED", "false").strip().lower() in {"1", "true", "yes", "si"}
-    print("=== MONITOR V11 - mesa editorial y memoria de Ole ===", "(modo simulacro: sin Sheet configurado)" if simulacro else "")
+    print("=== MONITOR V12 - frescura verificable, Ole Hoy y hallazgos ===", "(modo simulacro: sin Sheet configurado)" if simulacro else "")
     print(f"modo de convivencia: escrituras heredadas={'si' if legacy_memory else 'no'}")
 
     # El workflow puede disparar esta corrida cada 20 min (como respaldo por si
@@ -338,6 +338,9 @@ def main():
                     "ole_notas_listado": ole_fetch_meta.get("items", len(ultimas)),
                     "ole_notas_fechadas": ole_fetch_meta.get("dated_items", 0),
                     "ole_notas_hoy_fechadas": ole_fetch_meta.get("today_items", 0),
+                    "ole_notas_actualizadas_hoy": ole_fetch_meta.get("updated_today_items", 0),
+                    "ole_sitemap_agregadas": ole_fetch_meta.get("sitemap_added", 0),
+                    "ole_sitemap_encontradas": ole_fetch_meta.get("sitemap_items", 0),
                     "ole_primera_nota_hoy": ole_fetch_meta.get("earliest_today", ""),
                     "ole_ultima_nota_hoy": ole_fetch_meta.get("latest_today", ""),
                     "ole_detalle_fecha_consultas": ole_fetch_meta.get("detail_requests", 0),
@@ -353,7 +356,7 @@ def main():
         except Exception as exc:
             print(f"   snapshot online fallo: {exc}")
 
-    # Capa V11: resumen 4H, memoria de Ole, acciones y hallazgos.
+    # Capa V12: resumen 4H, memoria de Ole, acciones y hallazgos.
     # e informe ejecutivo. No publica: recomienda, alerta y registra feedback.
     agent_result = {"enabled": False}
     if not simulacro and online.disponible():
@@ -367,9 +370,12 @@ def main():
                 cut_quality=quality,
             )
             if agent_result.get("enabled"):
+                discoveries_log = agent_result.get('discoveries', [])
+                hallazgos_log = sum(1 for item in discoveries_log if item.get('status') in {'HALLAZGO FUERTE', 'HALLAZGO'})
+                candidatos_log = sum(1 for item in discoveries_log if item.get('status') == 'CANDIDATO')
                 print("   asistente: "
                       f"{len(agent_result.get('changes', []))} cambios · "
-                      f"{len(agent_result.get('discoveries', []))} hallazgos/candidatos · "
+                      f"{hallazgos_log} hallazgos · {candidatos_log} candidatos · "
                       f"{len(agent_result.get('opportunities', []))} oportunidades · "
                       f"{len((agent_result.get('editorial_desk') or {}).get('topics', []))} temas en resumen 4H · "
                       f"calidad {quality.get('state')} · "

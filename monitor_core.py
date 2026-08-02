@@ -505,46 +505,159 @@ def _ole_jsonld_dates(soup: BeautifulSoup) -> dict[str, dict]:
     return result
 
 
+def _ole_jsonld_articles(soup: BeautifulSoup) -> list[dict]:
+    """Extrae URLs, títulos y fechas de artículos desde cualquier JSON-LD."""
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def walk(value):
+        if isinstance(value, list):
+            for child in value:
+                walk(child)
+            return
+        if not isinstance(value, dict):
+            return
+        kind = value.get("@type")
+        kinds = set(kind if isinstance(kind, list) else [kind])
+        headline = str(value.get("headline") or value.get("name") or "").strip()
+        url = value.get("url") or value.get("@id") or value.get("mainEntityOfPage")
+        if isinstance(url, dict):
+            url = url.get("@id") or url.get("url")
+        url = _ole_normalize_url(str(url or ""))
+        if url and "ole.com.ar" in url and headline and (
+            kinds & {"NewsArticle", "Article", "ReportageNewsArticle", "ListItem"}
+            or "_0_" in url
+        ):
+            if url not in seen:
+                seen.add(url)
+                out.append({
+                    "titulo": headline[:250],
+                    "url": url,
+                    "imagen": "",
+                    "fecha_publicacion": str(value.get("datePublished") or value.get("uploadDate") or "").strip(),
+                    "fecha_actualizacion": str(value.get("dateModified") or "").strip(),
+                })
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                walk(child)
+
+    for script in soup.select('script[type="application/ld+json"]'):
+        raw = script.string or script.get_text("", strip=True)
+        if not raw:
+            continue
+        try:
+            walk(json.loads(raw))
+        except Exception:
+            continue
+    return out
+
+
 def _ole_parse_listing(html: str, page_number: int = 1) -> list[dict]:
+    """Extrae todas las notas visibles del listado, incluso si cambia el CSS."""
     soup = BeautifulSoup(html, "html.parser")
-    jsonld = _ole_jsonld_dates(soup)
-    containers = soup.select("div[data-noteid]")
-    if not containers:
-        containers = soup.select("li[class*='listado'], article, [class*='listado']")
-    out, seen = [], set()
-    for cont in containers:
-        a = cont.find("a", href=True)
-        if not a:
-            continue
-        url = _ole_normalize_url(a.get("href", ""))
+    jsonld_dates = _ole_jsonld_dates(soup)
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def add(title: str, url: str, published: str = "", modified: str = ""):
+        url = _ole_normalize_url(url)
+        title = " ".join(str(title or "").split())
         if not url or "ole.com.ar" not in url or url in seen:
-            continue
-        title_el = cont.find(["h1", "h2", "h3", "h4"]) or a
-        title = " ".join(title_el.get_text(" ", strip=True).split())
-        if len(title) < 16:
+            return
+        # Las notas de Olé suelen contener _0_ en el slug. Se aceptan además
+        # URLs dentro de secciones, pero se excluyen listados y navegación.
+        if any(part in url for part in ("/ultimas-noticias", "/agenda-deportiva", "/buscar")):
+            return
+        if len(title) < 12:
             slug = url.rstrip("/").split("/")[-1].replace(".html", "")
-            title = slug.replace("-", " ").capitalize()
-        if len(title) < 16:
-            continue
-        published = ""
-        modified = ""
-        time_el = cont.find("time")
-        if time_el:
-            published = str(time_el.get("datetime") or time_el.get("dateTime") or time_el.get("content") or "").strip()
-        for attr in ("data-published", "data-date", "data-fecha", "data-time", "data-timestamp"):
-            if not published and cont.get(attr):
-                published = str(cont.get(attr)).strip()
-        meta = jsonld.get(url, {})
-        published = published or meta.get("published", "")
-        modified = meta.get("modified", "")
+            title = slug.replace("-", " ").replace("_", " ").capitalize()
+        if len(title) < 12:
+            return
+        meta = jsonld_dates.get(url, {})
         seen.add(url)
         out.append({
             "titulo": title[:250], "url": url, "imagen": "",
-            "fecha_publicacion": published, "fecha_actualizacion": modified,
-            "ole_page": page_number,
+            "fecha_publicacion": published or meta.get("published", ""),
+            "fecha_actualizacion": modified or meta.get("modified", ""),
+            "ole_page": page_number, "ole_origin": "ultimas",
+            "date_trust": "publisher_metadata" if (published or meta.get("published")) else "missing",
         })
+
+    # Primero JSON-LD, que suele contener artículos no capturados por un selector CSS.
+    for item in _ole_jsonld_articles(soup):
+        add(item.get("titulo", ""), item.get("url", ""),
+            item.get("fecha_publicacion", ""), item.get("fecha_actualizacion", ""))
+
+    selectors = (
+        "div[data-noteid]", "article", "li[class*='listado']", "div[class*='listado']",
+        "div[class*='card']", "section[class*='list']", "main"
+    )
+    containers = soup.select(", ".join(selectors))
+    for cont in containers:
+        for a in cont.find_all("a", href=True):
+            href = a.get("href", "")
+            url = _ole_normalize_url(href)
+            if not url or "ole.com.ar" not in url:
+                continue
+            parent = a.find_parent(["article", "li", "div"]) or cont
+            heading = parent.find(["h1", "h2", "h3", "h4"]) if parent else None
+            title = (heading or a).get_text(" ", strip=True)
+            if not title:
+                title = a.get("aria-label") or a.get("title") or ""
+            published = ""
+            modified = ""
+            time_el = parent.find("time") if parent else None
+            if time_el:
+                published = str(time_el.get("datetime") or time_el.get("dateTime") or time_el.get("content") or "").strip()
+            if parent:
+                for attr in ("data-published", "data-date", "data-fecha", "data-time", "data-timestamp"):
+                    if not published and parent.get(attr):
+                        published = str(parent.get(attr)).strip()
+            add(title, url, published, modified)
     return out
 
+
+def _ole_fetch_sitemap_today(now: datetime) -> list[dict]:
+    """Respaldo para completar Olé Hoy cuando el listado omite tarjetas."""
+    urls = (
+        "https://www.ole.com.ar/sitemap-news.xml",
+        "https://www.ole.com.ar/sitemap_news.xml",
+        "https://www.ole.com.ar/news-sitemap.xml",
+    )
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    result: list[dict] = []
+    seen: set[str] = set()
+    for sitemap_url in urls:
+        try:
+            resp = requests.get(sitemap_url, headers=HEADERS, timeout=15)
+            if resp.status_code != 200 or "<url" not in resp.text:
+                continue
+            soup = BeautifulSoup(resp.text, "xml")
+            for node in soup.find_all("url"):
+                loc = node.find("loc")
+                date = node.find(["news:publication_date", "publication_date", "lastmod"])
+                title = node.find(["news:title", "title"])
+                url = _ole_normalize_url(loc.get_text(strip=True) if loc else "")
+                published = date.get_text(strip=True) if date else ""
+                parsed = _ole_parse_datetime(published)
+                if not url or url in seen or not parsed or parsed < start or parsed > now + timedelta(minutes=15):
+                    continue
+                seen.add(url)
+                result.append({
+                    "titulo": title.get_text(" ", strip=True)[:250] if title else "",
+                    "url": url,
+                    "imagen": "",
+                    "fecha_publicacion": published,
+                    "fecha_actualizacion": "",
+                    "ole_page": 0,
+                    "ole_origin": "sitemap",
+                    "date_trust": "publisher_metadata",
+                })
+            if result:
+                break
+        except Exception:
+            continue
+    return result
 
 def _ole_article_dates(url: str) -> tuple[str, str]:
     """Consulta una nota solo cuando el listado no ofrece fecha."""
@@ -611,121 +724,165 @@ def _ole_parse_datetime(value: str) -> datetime | None:
 
 
 def fetch_ultimas_ole() -> list:
-    """Reconstruye el día de Olé recorriendo la paginación de Últimas Noticias.
+    """Reconstruye el día de Olé desde listado + sitemap + metadata de notas.
 
-    El recorrido se detiene cuando llega con certeza a publicaciones anteriores
-    a las 00:00 de Argentina. Si el listado no expone fechas, consulta solo las
-    notas de borde de cada página y, en la página de transición, completa las
-    fechas faltantes. La metadata queda disponible con ``get_ole_fetch_meta``.
+    Solo marca cobertura completa cuando cruza de manera verificable las 00:00.
+    Las notas viejas actualizadas hoy se conservan en una categoría separada.
     """
     global _OLE_FETCH_META
     now = datetime.now(_OLE_TZ)
     start_today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    max_pages = max(2, int(os.environ.get("OLE_MAX_PAGES", "8") or 8))
-    detail_limit = max(0, int(os.environ.get("OLE_DETAIL_DATE_LIMIT", "35") or 35))
+    max_pages = max(3, int(os.environ.get("OLE_MAX_PAGES", "20") or 20))
+    detail_limit = max(20, int(os.environ.get("OLE_DETAIL_DATE_LIMIT", "180") or 180))
+    old_streak_required = max(3, int(os.environ.get("OLE_OLD_STREAK_REQUIRED", "6") or 6))
     all_items: list[dict] = []
     seen: set[str] = set()
     pages_done = 0
     detail_requests = 0
     stop_reason = "max_pages"
     reached_previous_day = False
+    unresolved = 0
+    old_streak = 0
+    page_counts: list[int] = []
+
+    def fetch_page(page: int) -> list[dict]:
+        candidates = (
+            ("https://www.ole.com.ar/ultimas-noticias/page", "https://www.ole.com.ar/ultimas-noticias")
+            if page == 1 else
+            (f"https://www.ole.com.ar/ultimas-noticias/page/{page}", f"https://www.ole.com.ar/ultimas-noticias/{page}")
+        )
+        last_exc = None
+        for url in candidates:
+            try:
+                resp = requests.get(url, headers=HEADERS, timeout=18)
+                resp.raise_for_status()
+                items = _ole_parse_listing(resp.text, page)
+                if items:
+                    return items
+            except Exception as exc:
+                last_exc = exc
+        if last_exc:
+            raise last_exc
+        return []
 
     for page in range(1, max_pages + 1):
-        url = "https://www.ole.com.ar/ultimas-noticias/page" if page == 1 else f"https://www.ole.com.ar/ultimas-noticias/page/{page}"
         try:
-            resp = requests.get(url, headers=HEADERS, timeout=18)
-            resp.raise_for_status()
-            page_items = _ole_parse_listing(resp.text, page)
+            page_items = fetch_page(page)
         except Exception as exc:
             stop_reason = f"error_pagina_{page}: {type(exc).__name__}"
             break
         pages_done += 1
         page_items = [item for item in page_items if item.get("url") and item["url"] not in seen]
+        page_counts.append(len(page_items))
         if not page_items:
             stop_reason = "sin_items_nuevos"
             break
 
-        # El listado de Olé no siempre expone fecha en todas las tarjetas. Para
-        # no contar notas de ayer como si fueran de hoy, completar la fecha de
-        # cada ítem sin metadata (hasta el límite configurado) consultando la
-        # propia nota. Es más costoso que mirar solo los bordes, pero se ejecuta
-        # una vez por corte y evita una memoria diaria falsa.
+        undated = [item for item in page_items if not item.get("fecha_publicacion") and not item.get("fecha_actualizacion")]
+        remaining = max(0, detail_limit - detail_requests)
+        to_fetch = undated[:remaining]
+        if to_fetch:
+            workers = min(6, len(to_fetch))
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {executor.submit(_ole_article_dates, item["url"]): item for item in to_fetch}
+                for future in as_completed(futures):
+                    item = futures[future]
+                    try:
+                        published, modified = future.result()
+                    except Exception:
+                        published, modified = "", ""
+                    detail_requests += 1
+                    item["fecha_publicacion"] = published
+                    item["fecha_actualizacion"] = modified
+                    if published or modified:
+                        item["date_trust"] = "article_metadata"
+
+        page_had_current = False
+        page_verified_old = 0
         for item in page_items:
-            if (item.get("fecha_publicacion") or item.get("fecha_actualizacion")
-                    or detail_requests >= detail_limit):
+            published_dt = _ole_parse_datetime(item.get("fecha_publicacion", ""))
+            modified_dt = _ole_parse_datetime(item.get("fecha_actualizacion", ""))
+            published_today = bool(published_dt and published_dt.date() == now.date())
+            updated_today = bool(modified_dt and modified_dt.date() == now.date())
+            if published_today or updated_today:
+                page_had_current = True
+                old_streak = 0
+                item["ole_day_status"] = "PUBLICADA_HOY" if published_today else "ACTUALIZADA_HOY"
+                item["date_trust"] = item.get("date_trust") or "publisher_metadata"
+                seen.add(item["url"])
+                all_items.append(item)
                 continue
-            published, modified = _ole_article_dates(item["url"])
-            detail_requests += 1
-            item["fecha_publicacion"] = published
-            item["fecha_actualizacion"] = modified
+            if published_dt and published_dt < start_today:
+                page_verified_old += 1
+                old_streak += 1
+            elif published_dt is None and modified_dt is None:
+                unresolved += 1
+                old_streak = 0
+            else:
+                old_streak = 0
 
-        dated = [_ole_parse_datetime(item.get("fecha_publicacion", "")) for item in page_items]
-        dated = [value for value in dated if value is not None]
-
-        newest = max(dated) if dated else None
-        oldest = min(dated) if dated else None
-        boundary_page = bool(newest and newest >= start_today and oldest and oldest < start_today)
-        entirely_old = bool(newest and newest < start_today)
-
-        if entirely_old:
+        if old_streak >= old_streak_required or (page_verified_old == len(page_items) and page_verified_old > 0):
+            reached_previous_day = True
+            stop_reason = "frontera_del_dia"
+            break
+        if not page_had_current and page_verified_old > 0 and unresolved == 0:
             reached_previous_day = True
             stop_reason = "dia_anterior"
             break
 
-        if boundary_page and detail_requests < detail_limit:
-            # La frontera de las 00:00 está dentro de esta página: fechar los
-            # elementos faltantes para no aceptar noticias de ayer por error.
-            for item in page_items:
-                if item.get("fecha_publicacion") or detail_requests >= detail_limit:
-                    continue
-                published, modified = _ole_article_dates(item["url"])
-                detail_requests += 1
-                item["fecha_publicacion"] = published
-                item["fecha_actualizacion"] = modified
+    # El news sitemap puede contener piezas omitidas por el listado visual.
+    sitemap_items = _ole_fetch_sitemap_today(now)
+    sitemap_added = 0
+    for item in sitemap_items:
+        if item.get("url") in seen:
+            continue
+        seen.add(item["url"])
+        item["ole_day_status"] = "PUBLICADA_HOY"
+        all_items.append(item)
+        sitemap_added += 1
 
-        for item in page_items:
-            published_dt = _ole_parse_datetime(item.get("fecha_publicacion", ""))
-            if published_dt is not None and published_dt < start_today:
-                reached_previous_day = True
-                continue
-            seen.add(item["url"])
-            all_items.append(item)
-
-        if boundary_page:
-            stop_reason = "frontera_del_dia"
-            reached_previous_day = True
-            break
-
-    dated_today = []
+    published_today = []
+    updated_today = []
     for item in all_items:
-        parsed = _ole_parse_datetime(item.get("fecha_publicacion", ""))
-        if parsed is not None and parsed.date() == now.date():
-            dated_today.append(parsed)
-    undated_items = sum(
-        1 for item in all_items
-        if _ole_parse_datetime(item.get("fecha_publicacion", "")) is None
-        and _ole_parse_datetime(item.get("fecha_actualizacion", "")) is None
-    )
-    if reached_previous_day and undated_items == 0:
+        published_dt = _ole_parse_datetime(item.get("fecha_publicacion", ""))
+        modified_dt = _ole_parse_datetime(item.get("fecha_actualizacion", ""))
+        if published_dt and published_dt.date() == now.date():
+            published_today.append(published_dt)
+        elif modified_dt and modified_dt.date() == now.date():
+            updated_today.append(modified_dt)
+
+    # Un listado con muy pocas tarjetas por página puede ser una extracción
+    # incompleta aunque haya cruzado las 00:00. En ese caso se declara estimada.
+    sparse_listing = bool(page_counts and max(page_counts) < 10)
+    if reached_previous_day and unresolved == 0 and not sparse_listing:
         status = "completa"
     elif all_items:
-        status = "estimada" if reached_previous_day or dated_today else "parcial"
+        status = "estimada" if reached_previous_day or published_today else "parcial"
     else:
         status = "parcial"
+
+    all_items.sort(key=lambda item: (
+        _ole_parse_datetime(item.get("fecha_actualizacion", ""))
+        or _ole_parse_datetime(item.get("fecha_publicacion", ""))
+        or start_today
+    ), reverse=True)
     _OLE_FETCH_META = {
         "status": status,
         "pages": pages_done,
         "items": len(all_items),
-        "dated_items": sum(1 for item in all_items if _ole_parse_datetime(item.get("fecha_publicacion", ""))),
-        "today_items": len(dated_today),
-        "earliest_today": min(dated_today).isoformat(timespec="minutes") if dated_today else "",
-        "latest_today": max(dated_today).isoformat(timespec="minutes") if dated_today else "",
+        "dated_items": len(published_today) + len(updated_today),
+        "today_items": len(published_today),
+        "updated_today_items": len(updated_today),
+        "earliest_today": min(published_today).isoformat(timespec="minutes") if published_today else "",
+        "latest_today": max(published_today).isoformat(timespec="minutes") if published_today else "",
         "detail_requests": detail_requests,
-        "undated_items": undated_items,
+        "undated_items": unresolved,
         "stop_reason": stop_reason,
+        "sitemap_items": len(sitemap_items),
+        "sitemap_added": sitemap_added,
+        "page_counts": page_counts,
     }
     return all_items
-
 
 def fetch_cobertura_ole_gnews() -> list:
     """Respaldo fechado de Google News para publicaciones de Olé."""
@@ -1677,7 +1834,7 @@ def _extraer_imagen_rss_item(item_raw: str) -> str:
 
     return ""
 
-CORE_VERSION = "núcleo v28 · frescura verificada + Ole diario estricto"
+CORE_VERSION = "núcleo v29 · V12 frescura auditada + Ole completo + hallazgos editoriales"
 MAX_ANTIGUEDAD_HORAS = int(os.environ.get("MAX_ANTIGUEDAD_HORAS", "18") or 18)  # ventana editorial configurable
 
 
@@ -2462,6 +2619,97 @@ def _fallback_gnews(fuente: dict, motivo_original: str) -> dict:
     return {"id": fuente["id"], "noticias": [], "error": motivo_original}
 
 
+
+def _generic_article_dates(url: str) -> tuple[str, str]:
+    """Obtiene fechas editoriales desde la nota original, no desde agregadores."""
+    if not url or "news.google.com" in url:
+        return "", ""
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=12)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        published = ""
+        modified = ""
+        for selector in (
+            'meta[property="article:published_time"]', 'meta[name="date"]',
+            'meta[name="publish-date"]', 'meta[name="pubdate"]',
+            'meta[itemprop="datePublished"]', 'time[itemprop="datePublished"]',
+        ):
+            tag = soup.select_one(selector)
+            if tag:
+                published = str(tag.get("content") or tag.get("datetime") or "").strip()
+                if published:
+                    break
+        for selector in (
+            'meta[property="article:modified_time"]', 'meta[name="last-modified"]',
+            'meta[itemprop="dateModified"]', 'time[itemprop="dateModified"]',
+        ):
+            tag = soup.select_one(selector)
+            if tag:
+                modified = str(tag.get("content") or tag.get("datetime") or "").strip()
+                if modified:
+                    break
+        if not published or not modified:
+            def walk(value):
+                nonlocal published, modified
+                if isinstance(value, list):
+                    for child in value:
+                        walk(child)
+                elif isinstance(value, dict):
+                    if not published:
+                        published = str(value.get("datePublished") or value.get("uploadDate") or "").strip()
+                    if not modified:
+                        modified = str(value.get("dateModified") or "").strip()
+                    for child in value.values():
+                        if isinstance(child, (dict, list)):
+                            walk(child)
+            for script in soup.select('script[type="application/ld+json"]'):
+                raw = script.string or script.get_text("", strip=True)
+                if not raw:
+                    continue
+                try:
+                    walk(json.loads(raw))
+                except Exception:
+                    continue
+        return published, modified
+    except Exception:
+        return "", ""
+
+
+def _verify_stale_risk_dates(noticias: list[dict], fuente: dict) -> list[dict]:
+    """Verifica en la nota original los titulares con alto riesgo de archivo.
+
+    Es un control selectivo: no abre todos los artículos. Evita que efemérides,
+    finales viejas o aniversarios reindexados entren al resumen 4H por la fecha
+    de un RSS o de una portada.
+    """
+    try:
+        from editorial_agents.freshness import is_stale_risk_title
+    except Exception:
+        return noticias
+    if "news.google.com" in str(fuente.get("url") or ""):
+        return noticias
+    limit = max(0, int(os.environ.get("STALE_DATE_VERIFY_LIMIT", "8") or 8))
+    requests_done = 0
+    for item in noticias:
+        title = str(item.get("titulo") or "")
+        if not is_stale_risk_title(title):
+            continue
+        if requests_done >= limit:
+            item["date_trust"] = "unverified_stale_risk"
+            continue
+        url = str(item.get("url") or "")
+        published, modified = _generic_article_dates(url)
+        requests_done += 1
+        if published:
+            item["article_published_at"] = published
+            item["fecha_publicacion"] = published
+            item["fecha_actualizacion"] = modified
+            item["date_trust"] = "article_metadata"
+        else:
+            item["date_trust"] = "unverified_stale_risk"
+    return noticias
+
 def fetch_fuente(fuente: dict) -> dict:
     try:
         if "news.google.com" in fuente.get("url", ""):
@@ -2481,11 +2729,13 @@ def fetch_fuente(fuente: dict) -> dict:
                 n["discovery_channel"] = "Google News" if is_gnews_feed else "RSS"
                 n["date_trust"] = (
                     "discovery_timestamp" if is_gnews_feed and n.get("fecha_publicacion")
-                    else "publisher_timestamp" if n.get("fecha_publicacion")
+                    else "rss_publisher_timestamp" if n.get("fecha_publicacion")
                     else "missing"
                 )
             noticias = noticias[:MAX_ITEMS]
             if noticias:
+                if not is_gnews_feed:
+                    noticias = _verify_stale_risk_dates(noticias, fuente)
                 return {"id": fuente["id"], "noticias": noticias, "error": None,
                         "via": "gnews" if is_gnews_feed else "rss"}
             # si el feed vino vacío y permite fallback, intentarlo
@@ -2522,6 +2772,7 @@ def fetch_fuente(fuente: dict) -> dict:
                 n.setdefault("source_id", fuente.get("id", ""))
                 n.setdefault("discovery_channel", "Web directa")
                 n.setdefault("date_trust", "publisher_timestamp" if n.get("fecha_publicacion") else "missing")
+            noticias = _verify_stale_risk_dates(noticias, fuente)
             # fuentes flacas marcadas: complementar el directo con Google News (dedup)
             if fuente.get("gnews_extra") and len(noticias) < 25:
                 extra = _fallback_gnews(fuente, "")
