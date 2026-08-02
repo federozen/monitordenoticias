@@ -362,3 +362,104 @@ class V115OleTodayClassificationTests(unittest.TestCase):
         }]
         entries, _ = build_ole_today(items, [], [], now)
         self.assertEqual(entries, [])
+
+class V116VerifiedFreshnessTests(unittest.TestCase):
+    def test_new_undated_world_cup_story_is_not_in_4h_summary(self):
+        from editorial_agents.desk import build_editorial_desk
+        from editorial_agents.utils import TZ_AR
+        now = datetime(2026, 8, 2, 19, 20, tzinfo=TZ_AR)
+        themes = [{
+            "cluster_id": "c_world_final",
+            "titulo": "Las claves de la final del Mundial que consagro al campeon",
+            "cant_medios": 4,
+            "nuevo": True,
+            "noticias": [],
+        }]
+        changes = [{"cluster_id": "c_world_final", "change_type": "NUEVO EN EL CORTE", "priority": 90}]
+        desk = build_editorial_desk(themes, changes, [], [], [], now=now)
+        self.assertEqual(desk["topics"], [])
+
+    def test_new_undated_scaloni_anniversary_is_not_in_4h_summary(self):
+        from editorial_agents.desk import build_editorial_desk
+        from editorial_agents.utils import TZ_AR
+        now = datetime(2026, 8, 2, 19, 20, tzinfo=TZ_AR)
+        themes = [{
+            "cluster_id": "c_scaloni_100",
+            "titulo": "Los 100 partidos de Scaloni al frente de la Seleccion Argentina",
+            "cant_medios": 3,
+            "nuevo": True,
+            "noticias": [],
+        }]
+        desk = build_editorial_desk(themes, [], [], [], [], now=now)
+        self.assertEqual(desk["topics"], [])
+
+    def test_google_news_timestamp_does_not_prove_freshness(self):
+        from editorial_agents.desk import build_editorial_desk
+        from editorial_agents.utils import TZ_AR
+        now = datetime(2026, 8, 2, 19, 20, tzinfo=TZ_AR)
+        themes = [{
+            "cluster_id": "c_gnews_old",
+            "titulo": "Una historia antigua que Google News volvio a indexar",
+            "cant_medios": 2,
+            "noticias": [{
+                "noticia": {
+                    "titulo": "Una historia antigua que Google News volvio a indexar",
+                    "fecha_publicacion": (now - timedelta(minutes=15)).isoformat(),
+                    "date_trust": "discovery_timestamp",
+                    "discovery_channel": "Google News",
+                },
+                "fuente": {"id": "gn_test", "nombre": "Google News", "url": "https://news.google.com/rss/search?q=test"},
+            }],
+        }]
+        desk = build_editorial_desk(themes, [], [], [], [], now=now)
+        self.assertEqual(desk["topics"], [])
+
+    def test_direct_publisher_timestamp_is_accepted(self):
+        from editorial_agents.desk import build_editorial_desk
+        from editorial_agents.utils import TZ_AR
+        now = datetime(2026, 8, 2, 19, 20, tzinfo=TZ_AR)
+        themes = [{
+            "cluster_id": "c_direct_recent",
+            "titulo": "El club confirmo una baja para el partido de esta noche",
+            "cant_medios": 2,
+            "noticias": [{
+                "noticia": {
+                    "titulo": "El club confirmo una baja para el partido de esta noche",
+                    "fecha_publicacion": (now - timedelta(minutes=15)).isoformat(),
+                    "date_trust": "publisher_timestamp",
+                    "discovery_channel": "RSS",
+                },
+                "fuente": {"id": "club", "nombre": "Club oficial", "url": "https://club.test/noticias"},
+            }],
+        }]
+        desk = build_editorial_desk(themes, [], [], [], [], now=now)
+        self.assertEqual(len(desk["topics"]), 1)
+
+    def test_discovery_rejects_google_news_only_timestamp(self):
+        from editorial_agents.discovery import generate
+        now = datetime.now(timezone.utc).isoformat()
+        results = {
+            "gn_test": [{
+                "titulo": "Historic old final story resurfaces in a search feed",
+                "url": "https://news.google.com/example",
+                "publisher_original": "Example",
+                "fecha_publicacion": now,
+                "date_trust": "discovery_timestamp",
+                "discovery_channel": "Google News",
+            }]
+        }
+        discoveries = generate(results, [], max_items=5)
+        self.assertEqual(discoveries, [])
+
+    def test_ole_today_rejects_undated_first_page_item(self):
+        from editorial_agents.ole_today import build_ole_today
+        from editorial_agents.utils import TZ_AR
+        now = datetime(2026, 8, 2, 19, 20, tzinfo=TZ_AR)
+        entries, groups = build_ole_today([{
+            "titulo": "Nota sin fecha en la primera pagina",
+            "url": "https://ole.test/sin-fecha",
+            "ole_origin": "ultimas",
+            "ole_page": 1,
+        }], [], [], now)
+        self.assertEqual(entries, [])
+        self.assertEqual(groups, [])
