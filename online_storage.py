@@ -46,9 +46,18 @@ RECOMENDACIONES_HEADERS = [
     "Publishers", "TieneOle", "Momentum", "EsNuevo", "FuentesOficiales", "Motivo", "EvidenciaJSON",
 ]
 DESCUBRIMIENTOS_HEADERS = [
-    "RunTS", "DiscoveryID", "Categoria", "Score", "ValorArgentina", "Titulo", "URL",
+    "RunTS", "DiscoveryID", "Categoria", "Estado", "Score", "ValorArgentina", "Titulo", "URL",
     "Publishers", "Medios", "FechaPublicacion", "AntiguedadHoras", "EsNuevo",
-    "EstadoOle", "TituloOle", "URLOle", "Motivo", "Angulo", "Formato", "EvidenciaJSON",
+    "EstadoOle", "TituloOle", "URLOle", "Motivo", "PorQueImporta", "Angulo", "Formato", "EvidenciaJSON",
+]
+CAMBIOS_HEADERS = [
+    "RunTS", "ChangeID", "ClusterID", "TipoCambio", "Prioridad", "Accion",
+    "CoberturaOle", "Titulo", "URL", "QueCambio", "MediosAhora", "MediosAntes",
+    "TieneOle", "TituloOle", "URLOle", "Motivo",
+]
+RESUMEN_HEADERS = [
+    "RunTS", "Titulo", "Texto", "ParaEvaluar", "ParaActualizar", "ParaVerificar",
+    "EnCrecimiento", "Hallazgos", "ErroresFuentes", "ChangeIDs", "DiscoveryIDs",
 ]
 OPORTUNIDADES_HEADERS = [
     "RunTS", "OpportunityID", "Score", "Formato", "Titulo", "TemaOrigen",
@@ -128,6 +137,8 @@ def asegurar_estructura() -> None:
     _ws("Feedback", FEEDBACK_HEADERS, rows=500)
     _ws("Recomendaciones", RECOMENDACIONES_HEADERS, rows=300)
     _ws("Descubrimientos", DESCUBRIMIENTOS_HEADERS, rows=200)
+    _ws("Cambios", CAMBIOS_HEADERS, rows=300)
+    _ws("Resumen", RESUMEN_HEADERS, rows=50)
     _ws("Oportunidades", OPORTUNIDADES_HEADERS, rows=200)
     _ws("Informes", INFORMES_HEADERS, rows=500)
     _ws("Avisos", AVISOS_HEADERS, rows=1000)
@@ -343,13 +354,13 @@ def guardar_agente_snapshot(recommendations: list[dict], discoveries: list[dict]
     discovery_rows = []
     for item in discoveries:
         discovery_rows.append([
-            now, item.get("discovery_id", ""), item.get("category", ""),
+            now, item.get("discovery_id", ""), item.get("category", ""), item.get("status", ""),
             item.get("score", 0), item.get("value_argentina", 0), item.get("title", ""),
             item.get("url", ""), " | ".join(item.get("publishers", []) or []),
             item.get("media_count", 0), item.get("published_at", ""),
             item.get("age_hours", ""), item.get("is_new", False),
             item.get("ole_status", ""), item.get("ole_match_title", ""),
-            item.get("ole_match_url", ""), item.get("reason", ""),
+            item.get("ole_match_url", ""), item.get("reason", ""), item.get("why_it_matters", ""),
             item.get("suggested_angle", ""), item.get("suggested_format", ""),
             item.get("evidence", []),
         ])
@@ -368,6 +379,42 @@ def guardar_agente_snapshot(recommendations: list[dict], discoveries: list[dict]
         "opportunities": _replace("Oportunidades", OPORTUNIDADES_HEADERS, opp_rows, 200),
     }
 
+
+
+def guardar_briefing_snapshot(changes: list[dict], summary: dict) -> dict:
+    asegurar_estructura()
+    now = datetime.now(_TZ_AR).isoformat(timespec="seconds")
+    change_rows = []
+    for item in changes or []:
+        change_rows.append([
+            now, item.get("change_id", ""), item.get("cluster_id", ""),
+            item.get("change_type", ""), item.get("priority", 0), item.get("action", ""),
+            item.get("coverage_status", ""), item.get("title", ""), item.get("url", ""),
+            item.get("what_changed", ""), item.get("media_now", 0), item.get("media_before", 0),
+            item.get("has_ole", False), item.get("ole_match_title", ""),
+            item.get("ole_match_url", ""), item.get("reason", ""),
+        ])
+    summary_rows = [[
+        summary.get("created_at", now), summary.get("title", "Resumen del corte"),
+        summary.get("plain_text", ""), summary.get("publish_count", 0),
+        summary.get("update_count", 0), summary.get("verify_count", 0),
+        summary.get("growth_count", 0), summary.get("discovery_count", 0),
+        summary.get("source_error_count", 0), summary.get("top_change_ids", []),
+        summary.get("top_discovery_ids", []),
+    ]]
+    return {
+        "changes": _replace("Cambios", CAMBIOS_HEADERS, change_rows, 300),
+        "summary": _replace("Resumen", RESUMEN_HEADERS, summary_rows, 50),
+    }
+
+
+def leer_cambios() -> list[dict]:
+    return _records("Cambios", CAMBIOS_HEADERS)
+
+
+def leer_resumen() -> dict:
+    rows = _records("Resumen", RESUMEN_HEADERS)
+    return rows[-1] if rows else {}
 
 def _append(base: str, headers: list[str], row: list[Any], max_rows: int = 1500) -> bool:
     try:

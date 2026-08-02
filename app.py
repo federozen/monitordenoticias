@@ -21,7 +21,7 @@ import sheets_memoria
 TZ_AR = timezone(timedelta(hours=-3))
 
 st.set_page_config(
-    page_title="Monitor Deportivo V9.2",
+    page_title="Monitor Deportivo V10",
     page_icon="MD",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -55,6 +55,8 @@ def load_data() -> dict:
         "sources": store.leer_fuentes(),
         "control": store.leer_control(),
         "recommendations": store.leer_recomendaciones(),
+        "changes": store.leer_cambios(),
+        "summary": store.leer_resumen(),
         "discoveries": store.leer_descubrimientos(),
         "opportunities": store.leer_oportunidades(),
         "reports": store.leer_informes(20),
@@ -214,10 +216,12 @@ def render_discovery(row: dict, idx: int, compact: bool = False) -> None:
                 unsafe_allow_html=True,
             )
             st.caption(
-                f"{row.get('Categoria','HALLAZGO')} | score {row.get('Score','0')}/100 | "
+                f"{row.get('Estado') or row.get('Categoria','HALLAZGO')} | {row.get('Categoria','')} | score {row.get('Score','0')}/100 | "
                 f"valor Argentina {row.get('ValorArgentina','0')}/100 | "
                 f"{row.get('Medios','0')} publishers"
             )
+            if row.get("PorQueImporta"):
+                st.write(f"**Por que puede importar:** {row.get('PorQueImporta')}")
             if row.get("Motivo"):
                 st.write(row.get("Motivo"))
             if row.get("Angulo"):
@@ -272,41 +276,81 @@ def render_theme(row: dict, idx: int) -> None:
         )
 
 
+def render_change(row: dict, idx: int) -> None:
+    with st.container(border=True):
+        st.markdown(f"### {title_link(row.get('Titulo',''), row.get('URL',''))}", unsafe_allow_html=True)
+        st.caption(
+            f"{row.get('TipoCambio','CAMBIO')} | {row.get('Accion','OBSERVAR')} | "
+            f"prioridad {row.get('Prioridad','0')} | medios {row.get('MediosAntes','0')} → {row.get('MediosAhora','0')}"
+        )
+        if row.get("QueCambio"):
+            st.write(row.get("QueCambio"))
+        if row.get("TituloOle"):
+            st.markdown(
+                "**Nota de Ole vinculada:** " + title_link(row.get("TituloOle", ""), row.get("URLOle", "")),
+                unsafe_allow_html=True,
+            )
+        if row.get("Motivo"):
+            with st.expander("Ver criterio y evidencia"):
+                st.write(row.get("Motivo"))
+        feedback_widget(
+            row.get("ClusterID", ""), row.get("Titulo", ""), row.get("Accion", ""),
+            f"change_{idx}_{row.get('ChangeID','')}",
+        )
+
+
 def page_now(data: dict) -> None:
     control = data["control"]
-    recs = data["recommendations"]
+    summary = data.get("summary") or {}
+    changes = data.get("changes") or []
     discoveries = data["discoveries"]
     sources = data["sources"]
-    st.title("Monitor Deportivo V9.2")
-    st.caption("Dos radares: acciones operativas sobre la cobertura de Ole y hallazgos internacionales con mirada argentina.")
+
+    st.title("Monitor Deportivo V10")
+    st.caption("Un resumen del corte, los cambios concretos para agregar y un radar de hallazgos que evita navegar fuente por fuente.")
     last = control.get("ultima_actualizacion", "Sin datos")
-    operational = [
-        r for r in recs
-        if as_int(r.get("Prioridad")) >= 60
-        and r.get("Accion") in {"PUBLICAR AHORA", "ACTUALIZAR", "VERIFICAR"}
+    actionable_changes = [
+        row for row in changes
+        if row.get("Accion") in {"PUBLICAR AHORA", "ACTUALIZAR", "VERIFICAR"}
+        and as_int(row.get("Prioridad")) >= 60
     ]
-    findings = [d for d in discoveries if as_int(d.get("Score")) >= 58]
+    strong_findings = [d for d in discoveries if (d.get("Estado") or "") in {"HALLAZGO FUERTE", "CANDIDATO"}]
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Ultima actualizacion", last.replace("T", " ")[:19])
-    c2.metric("Acciones operativas", len(operational))
-    c3.metric("Hallazgos", len(findings))
+    c2.metric("Cambios accionables", len(actionable_changes))
+    c3.metric("Hallazgos y candidatos", len(strong_findings))
     c4.metric("Fuentes activas", f"{control.get('fuentes_ok','0')}/{control.get('fuentes_total','0')}")
 
-    tab_local, tab_findings = st.tabs(["Radar operativo", "Descubrimiento"])
-    with tab_local:
-        st.subheader("Que cambio y requiere una accion")
-        if not operational:
-            st.info("No hay faltantes, actualizaciones o verificaciones de prioridad alta en este corte.")
-        for idx, row in enumerate(operational[:8]):
-            render_recommendation(row, idx, compact=True)
+    st.subheader(summary.get("Titulo") or "Resumen del corte")
+    if summary.get("Texto"):
+        st.text(summary.get("Texto"))
+    else:
+        st.info("Todavia no se genero el resumen comparado. Ejecuta una nueva corrida: la primera crea la base y la segunda muestra los cambios.")
+
+    tab_changes, tab_findings, tab_panorama = st.tabs([
+        "Que cambio", "Hallazgos", "Panorama completo"
+    ])
+    with tab_changes:
+        st.subheader("Que cambio desde el corte anterior")
+        st.caption("Solo aparecen novedades, crecimiento, cambios de cobertura o acciones nuevas. Los temas estables no se repiten.")
+        if not changes:
+            st.info("No se detectaron cambios relevantes desde el corte anterior.")
+        for idx, row in enumerate(changes[:20]):
+            render_change(row, idx)
 
     with tab_findings:
-        st.subheader("Historias raras o del exterior")
-        st.caption("Se priorizan rareza, potencial narrativo, conexion argentina y ausencia de una nota equivalente en Ole.")
-        if not findings:
-            st.info("No aparecieron hallazgos con suficiente valor editorial en este corte.")
-        for idx, row in enumerate(findings[:8]):
+        st.subheader("Historias para descubrir")
+        st.caption("Siempre muestra los mejores candidatos internacionales del corte, aunque ninguno alcance la categoria de hallazgo fuerte.")
+        if not discoveries:
+            st.warning("No hubo material internacional util en las fuentes del corte. Revisa V9_Fuentes y los radares de descubrimiento.")
+        for idx, row in enumerate(discoveries[:15]):
             render_discovery(row, idx, compact=True)
+
+    with tab_panorama:
+        st.caption("Inventario amplio para consultar. No equivale a una lista de temas para publicar.")
+        for idx, row in enumerate(data["themes"][:40]):
+            render_theme(row, idx)
 
     errors = [source for source in sources if source.get("Estado") != "ok"]
     with st.expander(f"Salud de fuentes: {len(errors)} con problemas"):
@@ -316,7 +360,7 @@ def page_now(data: dict) -> None:
             st.write(f"**{source.get('Fuente')}** - {source.get('Error') or 'sin noticias'}")
 
 def page_assistant(data: dict) -> None:
-    st.title("Asistente editorial V9.2")
+    st.title("Asistente editorial V10")
     recs = data["recommendations"]
     discoveries = data["discoveries"]
     opportunities = data["opportunities"]
@@ -509,7 +553,7 @@ def page_config(data: dict) -> None:
         st.link_button("Abrir la planilla", store.url_planilla())
     prefix = store.prefix()
     st.write(
-        f"Pestanas V9: **{prefix}Noticias, {prefix}Temas, {prefix}Fuentes, "
+        f"Pestanas del monitor: **{prefix}Noticias, {prefix}Temas, {prefix}Fuentes, "
         f"{prefix}Recomendaciones, {prefix}Descubrimientos, {prefix}Oportunidades, {prefix}Informes, "
         f"{prefix}Avisos y {prefix}AgentLog**."
     )
@@ -534,7 +578,7 @@ def page_config(data: dict) -> None:
 
 
 with st.sidebar:
-    st.header("Monitor V9.2")
+    st.header("Monitor V10")
     page = st.radio(
         "Ir a",
         ["Ahora", "Asistente", "Explorar", "Producir", "Predictivo", "Configuracion"],
@@ -558,7 +602,7 @@ if not store.disponible():
 
 data = load_data()
 if not data["themes"] and not data["control"]:
-    st.warning("La conexion funciona, pero todavia no existe un snapshot V9. Ejecuta el workflow una vez.")
+    st.warning("La conexion funciona, pero todavia no existe un snapshot del monitor. Ejecuta el workflow una vez.")
 
 if page == "Ahora":
     page_now(data)

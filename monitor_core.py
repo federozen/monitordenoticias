@@ -87,6 +87,14 @@ FUENTES_INT = [
     {"id": "efe",       "nombre": "EFE (agencia)",   "url": "https://news.google.com/rss/search?q=site:efe.com/deportes&hl=es-419&gl=AR&ceid=AR:es-419", "color": "#0055a5", "es_rss": True},
     {"id": "afp_f24",   "nombre": "AFP (France 24)", "url": "https://news.google.com/rss/search?q=site:france24.com/es%20(futbol%20OR%20deportes%20OR%20Argentina)&hl=es-419&gl=AR&ceid=AR:es-419", "color": "#0f3b8c", "es_rss": True},
     {"id": "reuters_dep","nombre": "Reuters Sports", "url": "https://news.google.com/rss/search?q=site:reuters.com%20(soccer%20OR%20football%20OR%20Argentina)&hl=en-US&gl=US&ceid=US:en", "color": "#ff8000", "es_rss": True},
+
+    # Radares de descubrimiento: no cuentan como publishers; sirven para encontrar
+    # historias poco obvias y luego se conserva el medio original de Google News.
+    {"id": "disc_weird_en", "nombre": "Radar rarezas EN", "url": "https://news.google.com/rss/search?q=(football%20OR%20soccer%20OR%20sports)%20(bizarre%20OR%20unusual%20OR%20viral%20OR%20record%20OR%20miracle)&hl=en-US&gl=US&ceid=US:en", "color": "#5b21b6", "es_rss": True, "sin_fallback": True},
+    {"id": "disc_weird_es", "nombre": "Radar rarezas ES", "url": "https://news.google.com/rss/search?q=(futbol%20OR%20deporte)%20(insolito%20OR%20curioso%20OR%20viral%20OR%20record%20OR%20milagro)&hl=es-419&gl=AR&ceid=AR:es-419", "color": "#6d28d9", "es_rss": True, "sin_fallback": True},
+    {"id": "disc_weird_pt", "nombre": "Radar rarezas BR", "url": "https://news.google.com/rss/search?q=(futebol%20OR%20esporte)%20(inusitado%20OR%20curioso%20OR%20viral%20OR%20recorde%20OR%20milagre)&hl=pt-BR&gl=BR&ceid=BR:pt-419", "color": "#7c3aed", "es_rss": True, "sin_fallback": True},
+    {"id": "disc_arg_world", "nombre": "Argentinos por el mundo", "url": "https://news.google.com/rss/search?q=(Argentine%20OR%20Argentinian%20OR%20argentino)%20(football%20OR%20soccer%20OR%20coach%20OR%20player)&hl=en-US&gl=US&ceid=US:en", "color": "#6cace4", "es_rss": True, "sin_fallback": True},
+    {"id": "disc_sportbiz", "nombre": "Tecnologia y negocio deportivo", "url": "https://news.google.com/rss/search?q=(football%20OR%20sports)%20(technology%20OR%20stadium%20OR%20broadcast%20OR%20business%20OR%20innovation)&hl=en-US&gl=US&ceid=US:en", "color": "#0f766e", "es_rss": True, "sin_fallback": True},
 ]
 
 # ─── GRUPO 3: PRIMICIAS E INSTITUCIONES ──────────────────────────────────────

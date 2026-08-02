@@ -132,7 +132,7 @@ def enviar_telegram(texto: str, html: bool = True, silencioso: bool = False) -> 
 def main():
     simulacro = not mem.disponible()
     legacy_memory = os.environ.get("LEGACY_MEMORY_WRITES_ENABLED", "false").strip().lower() in {"1", "true", "yes", "si"}
-    print("=== MONITOR V9.2 - doble radar editorial ===", "(modo simulacro: sin Sheet configurado)" if simulacro else "")
+    print("=== MONITOR V10 - resumen, cambios y hallazgos ===", "(modo simulacro: sin Sheet configurado)" if simulacro else "")
     print(f"modo de convivencia: escrituras heredadas={'si' if legacy_memory else 'no'}")
 
     # El workflow puede disparar esta corrida cada 20 min (como respaldo por si
@@ -272,6 +272,15 @@ def main():
         or (it["accion"] == "REDACTAR" and it["cant_medios"] >= cfg["umbral_medios"])
     ]
 
+    # Se conserva el corte anterior antes de reemplazar las pestanas operativas.
+    # El resumen editorial se basa en diferencias reales, no en el inventario completo.
+    previous_themes = []
+    if not simulacro and online.disponible():
+        try:
+            previous_themes = online.leer_temas()
+        except Exception:
+            previous_themes = []
+
     # Snapshot para la app liviana. Usa pestanas nuevas (V9_ por defecto),
     # por lo que puede convivir con la planilla y el vigia anteriores.
     if not simulacro and online.disponible():
@@ -290,7 +299,7 @@ def main():
         except Exception as exc:
             print(f"   snapshot online fallo: {exc}")
 
-    # Capa V9: un coordinador con modulos de radar, curacion, oportunidades
+    # Capa V10: resumen comparado, cambios accionables y hallazgos.
     # e informe ejecutivo. No publica: recomienda, alerta y registra feedback.
     agent_result = {"enabled": False}
     if not simulacro and online.disponible():
@@ -299,11 +308,12 @@ def main():
                 tendencias, agenda, estados_fuentes, online,
                 send_telegram=enviar_telegram, config=cfg,
                 raw_results=resultados, ole_coverage=ole_coverage,
+                previous_themes=previous_themes,
             )
             if agent_result.get("enabled"):
                 print("   asistente: "
-                      f"{len(agent_result.get('recommendations', []))} recomendaciones · "
-                      f"{len(agent_result.get('discoveries', []))} hallazgos · "
+                      f"{len(agent_result.get('changes', []))} cambios · "
+                      f"{len(agent_result.get('discoveries', []))} hallazgos/candidatos · "
                       f"{len(agent_result.get('opportunities', []))} oportunidades · "
                       f"{agent_result.get('alerts_sent', 0)} alertas")
         except Exception as exc:
