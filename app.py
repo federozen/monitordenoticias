@@ -21,7 +21,7 @@ import sheets_memoria
 TZ_AR = timezone(timedelta(hours=-3))
 
 st.set_page_config(
-    page_title="Monitor Deportivo V10",
+    page_title="Monitor Deportivo V11",
     page_icon="MD",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -61,6 +61,14 @@ def load_data() -> dict:
         "opportunities": store.leer_oportunidades(),
         "reports": store.leer_informes(20),
         "agent_log": store.leer_agent_log(50),
+        "summary4h": store.leer_resumen_4h(),
+        "actions_editor": store.leer_acciones_editor(),
+        "ole_today": store.leer_ole_hoy(),
+        "ole_coverage_editor": store.leer_cobertura_ole_editor(),
+        "findings_editor": store.leer_hallazgos_editor(),
+        "sources_editor": store.leer_fuentes_editor(),
+        "social_inbox": store.leer_buzon_social(),
+        "ai_parts": store.leer_partes_ia(50),
     }
 
 
@@ -509,6 +517,228 @@ Material: {json.dumps(context, ensure_ascii=False)}"""
                 except Exception as exc:
                     st.error(str(exc))
 
+def _row_link(title: str, url: str) -> str:
+    return title_link(title, url)
+
+
+def _current_cut(rows: list[dict]) -> str:
+    return str(rows[0].get("Corte") or "") if rows else ""
+
+
+def render_summary_row(row: dict) -> None:
+    action = row.get("Accion") or "INFORMARSE"
+    with st.container(border=True):
+        st.markdown(f"### {row.get('Orden','')}. {_row_link(row.get('Tema',''), row.get('URLPrincipal',''))}", unsafe_allow_html=True)
+        st.caption(
+            f"{row.get('Importancia','')} | {row.get('Seccion','')} | {action} | "
+            f"prioridad {row.get('Prioridad','0')} | {row.get('Medios','0')} medios | Olé: {row.get('EstadoOle','')}"
+        )
+        if row.get("QuePaso"):
+            st.write(row.get("QuePaso"))
+        if row.get("QueCambio"):
+            st.write(f"**Qué cambió:** {row.get('QueCambio')}")
+        if row.get("PorQueImporta"):
+            st.write(f"**Por qué importa:** {row.get('PorQueImporta')}")
+        if row.get("NotaOle"):
+            st.markdown("**Cobertura relacionada de Olé:** " + _row_link(row.get("NotaOle", ""), row.get("URLOle", "")), unsafe_allow_html=True)
+        if row.get("Fuentes"):
+            st.caption(f"Fuentes: {row.get('Fuentes')}")
+
+
+def render_action_editor(row: dict, idx: int) -> None:
+    options = ["PENDIENTE", "EN CURSO", "HECHO", "DESCARTADO", "SEGUIR"]
+    current = row.get("Estado", "PENDIENTE")
+    with st.container(border=True):
+        left, right = st.columns([4.8, 1.5])
+        with left:
+            st.markdown(f"### {row.get('Accion','')} · {row.get('Tema','')}")
+            st.caption(f"Prioridad {row.get('Prioridad','0')} | estado {current}")
+            if row.get("DatoNuevo"):
+                st.write(f"**Dato o cambio:** {row.get('DatoNuevo')}")
+            if row.get("NotaOle"):
+                st.markdown("**Nota de Olé:** " + _row_link(row.get("NotaOle", ""), row.get("URLOle", "")), unsafe_allow_html=True)
+            if row.get("Fuentes"):
+                st.caption(f"Fuentes: {row.get('Fuentes')}")
+        with right:
+            status = st.selectbox(
+                "Estado", options, index=options.index(current) if current in options else 0,
+                key=f"action_status_{idx}_{row.get('ActionID','')}",
+            )
+            note = st.text_input("Nota", value=row.get("Notas", ""), key=f"action_note_{idx}_{row.get('ActionID','')}")
+            if st.button("Guardar", key=f"action_save_{idx}_{row.get('ActionID','')}"):
+                if store.actualizar_accion_editor(row.get("ActionID", ""), status, note):
+                    load_data.clear()
+                    st.success("Acción actualizada.")
+                    st.rerun()
+                else:
+                    st.error("No se pudo actualizar.")
+
+
+def _build_paid_prompt(rows: list[dict], cut_key: str) -> str:
+    material = []
+    for row in rows[:40]:
+        material.append({
+            "seccion": row.get("Seccion"), "tema": row.get("Tema"),
+            "que_paso": row.get("QuePaso"), "que_cambio": row.get("QueCambio"),
+            "por_que_importa": row.get("PorQueImporta"), "estado_ole": row.get("EstadoOle"),
+            "nota_ole": row.get("NotaOle"), "accion": row.get("Accion"),
+            "fuentes": row.get("Fuentes"), "urls": row.get("URLsFuentes"),
+        })
+    return f'''Sos un editor jefe deportivo de Olé. Redactá un PARTE EDITORIAL AMPLIADO en español rioplatense sobre el corte {cut_key}.
+Usá exclusivamente el material suministrado. No inventes datos, horarios, estados oficiales ni citas.
+Diferenciá OFICIAL, VERSION, A CONFIRMAR y COINCIDENCIA DUDOSA cuando corresponda.
+El informe debe tener:
+1. FÚTBOL ARGENTINO.
+2. SELECCIÓN / ARGENTINOS EN EL EXTERIOR.
+3. INTERNACIONAL Y HALLAZGOS.
+4. OTROS DEPORTES.
+5. PARA SEGUIR EN LAS PRÓXIMAS HORAS.
+6. CAMBIOS RESPECTO DEL CORTE ANTERIOR.
+7. CIERRE EJECUTIVO con imprescindibles, oportunidades no publicadas, notas para actualizar y alertas de verificación.
+Para los temas principales usá: NOVEDAD, QUÉ PASÓ, ESTADO, POR QUÉ IMPORTA, COBERTURA EN OLÉ, ACCIÓN SUGERIDA y FUENTES.
+No recomiendes una noticia nueva si Olé ya la cubrió sin un dato posterior. En ese caso indicá INFORMARSE, SEGUIR o NO HACER OTRA NOTA.
+Priorizá historias raras o internacionales con valor para el lector deportivo argentino.
+Material estructurado: {json.dumps(material, ensure_ascii=False)}'''
+
+
+def paid_report_block(data: dict) -> None:
+    rows = data.get("summary4h") or []
+    cut_key = _current_cut(rows)
+    if not rows:
+        st.info("Todavía no existe un resumen gratuito de cuatro horas.")
+        return
+    existing = store.parte_ia_para_corte(cut_key)
+    st.subheader("Parte editorial ampliado con IA")
+    st.caption("No se genera automáticamente. Solo consume Anthropic cuando confirmás y pulsás el botón.")
+    if existing:
+        st.success(f"Ya existe un parte para este corte, generado {existing.get('FechaHora','')}.")
+        with st.expander(existing.get("Titulo") or "Abrir parte ampliado", expanded=False):
+            st.markdown(existing.get("Texto", ""))
+        regenerate = st.checkbox("Quiero regenerarlo y aceptar una nueva llamada paga", key=f"regen_{cut_key}")
+        button_label = "Regenerar parte con IA"
+        disabled = not regenerate
+    else:
+        st.info("Informe ampliado: no generado. Costo de IA utilizado en este corte: ninguno.")
+        confirm = st.checkbox("Confirmo que quiero generar un informe pago bajo demanda", key=f"confirm_ai_{cut_key}")
+        button_label = "Generar parte editorial ampliado"
+        disabled = not confirm
+    if st.button(button_label, type="primary", disabled=disabled, key=f"paid_part_{cut_key}"):
+        api_key = _secret("ANTHROPIC_API_KEY")
+        if not api_key:
+            st.error("Falta ANTHROPIC_API_KEY en los Secrets de Streamlit.")
+            return
+        prompt = _build_paid_prompt(rows, cut_key)
+        with st.spinner("Generando el parte ampliado bajo demanda..."):
+            try:
+                text = monitor_core.call_claude(prompt, api_key, max_tokens=5000, modelo=monitor_core.MODELO_ECONOMICO)
+                title = f"Parte editorial ampliado · {cut_key}"
+                store.guardar_parte_ia(cut_key, title, text, monitor_core.MODELO_ECONOMICO, len(rows), regeneration=bool(existing))
+                st.success("Parte generado y guardado. Volver a abrirlo no consume IA.")
+                st.markdown(text)
+            except Exception as exc:
+                st.error(str(exc))
+
+
+def page_desk(data: dict) -> None:
+    rows = data.get("summary4h") or []
+    actions = [row for row in data.get("actions_editor", []) if row.get("Estado") not in {"HECHO", "DESCARTADO"}]
+    findings = data.get("findings_editor") or []
+    ole_today = data.get("ole_today") or []
+    ole_coverage = data.get("ole_coverage_editor") or []
+    source_rows = data.get("sources_editor") or []
+    st.title("Mesa editorial V11")
+    st.caption("Una sola pantalla para saber qué pasó, qué cambió, qué publicó Olé, qué falta y qué conviene seguir.")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Temas del corte", len(rows))
+    c2.metric("Acciones pendientes", len(actions))
+    c3.metric("Hallazgos", len(findings))
+    c4.metric("Notas de Olé detectadas", len(ole_today))
+    if rows:
+        st.info(f"Corte: {rows[0].get('Desde','')} a {rows[0].get('Hasta','')} · actualizado {rows[0].get('Generado','')}")
+    tabs = st.tabs(["Resumen 4H", "Acciones", "Olé hoy", "Hallazgos", "Fuentes", "Parte ampliado"])
+    with tabs[0]:
+        mode = st.radio("Lectura", ["2 minutos", "Completa"], horizontal=True)
+        limit = 10 if mode == "2 minutos" else 40
+        for row in rows[:limit]:
+            render_summary_row(row)
+        if store.url_planilla():
+            st.link_button("Abrir la planilla", store.url_planilla())
+    with tabs[1]:
+        if not actions:
+            st.success("No hay acciones pendientes en este corte.")
+        for idx, row in enumerate(actions[:50]):
+            render_action_editor(row, idx)
+    with tabs[2]:
+        st.subheader("Memoria viva de lo publicado por Olé")
+        st.caption("Las notas se agrupan por tema para evitar recomendar otra pieza general cuando ya existen varios enfoques.")
+        for group in ole_coverage[:40]:
+            with st.expander(f"{group.get('Tema','')} · {group.get('Piezas','0')} pieza(s)"):
+                st.write(f"**Enfoques:** {group.get('Enfoques','')}")
+                st.write(f"**Acción:** {group.get('Accion','')}")
+                if is_yes(group.get("Sobrecobertura")):
+                    st.warning("Posible sobrecobertura: buscar un ángulo distinto antes de sumar otra nota general.")
+                if group.get("NovedadesExternas"):
+                    st.write(f"**Novedades externas relacionadas:** {group.get('NovedadesExternas')}")
+                if group.get("UltimoTitulo"):
+                    st.markdown(_row_link(group.get("UltimoTitulo", ""), group.get("UltimaURL", "")), unsafe_allow_html=True)
+        with st.expander("Línea de tiempo de publicaciones"):
+            st.dataframe(ole_today[:200], use_container_width=True, hide_index=True)
+    with tabs[3]:
+        if not findings:
+            st.info("No hay hallazgos en este corte. El resumen general sigue disponible.")
+        for row in findings[:30]:
+            with st.container(border=True):
+                st.markdown(f"### {_row_link(row.get('Tema',''), row.get('URLPrincipal',''))}", unsafe_allow_html=True)
+                st.caption(f"Prioridad {row.get('Prioridad','')} | {row.get('Accion','')} | Olé: {row.get('EstadoOle','')}")
+                st.write(row.get("QuePaso", ""))
+                if row.get("PorQueImporta"):
+                    st.write(f"**Valor para Argentina:** {row.get('PorQueImporta')}")
+                st.caption(f"Fuentes: {row.get('Fuentes','')}")
+    with tabs[4]:
+        broken = [row for row in source_rows if row.get("Estado") != "SALUDABLE"]
+        st.metric("Fuentes que requieren atención", len(broken))
+        st.dataframe(source_rows, use_container_width=True, hide_index=True)
+    with tabs[5]:
+        paid_report_block(data)
+
+
+def page_social_inbox(data: dict) -> None:
+    st.title("Buzón social")
+    st.caption("Pegá enlaces de X, Instagram, YouTube, TikTok, Bluesky u otras redes. El próximo corte los incorpora sin necesitar una API paga.")
+    with st.form("social_form", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        platform = c1.selectbox("Plataforma", ["X/Twitter", "Instagram", "YouTube", "TikTok", "Bluesky", "Facebook", "Otra"])
+        author = c2.text_input("Autor o cuenta")
+        title = st.text_input("Título o descripción breve")
+        url = st.text_input("Enlace")
+        note = st.text_area("Qué viste o qué habría que verificar")
+        why = st.text_input("Por qué puede importar")
+        if st.form_submit_button("Agregar al radar", type="primary"):
+            if not url:
+                st.warning("Pegá un enlace.")
+            elif store.agregar_buzon_social(platform, author, title, url, note, why):
+                load_data.clear()
+                st.success("Enlace agregado al buzón.")
+                st.rerun()
+            else:
+                st.error("No se pudo guardar.")
+    items = data.get("social_inbox") or []
+    st.subheader("Enlaces cargados")
+    for idx, row in enumerate(reversed(items[-100:])):
+        with st.container(border=True):
+            st.markdown(f"### {_row_link(row.get('Titulo') or 'Enlace social', row.get('URL',''))}", unsafe_allow_html=True)
+            st.caption(f"{row.get('Plataforma','')} · {row.get('Autor','')} · {row.get('Estado','')}")
+            if row.get("Nota"):
+                st.write(row.get("Nota"))
+            options = ["PENDIENTE", "SEGUIR", "HECHO", "DESCARTADO"]
+            current = row.get("Estado", "PENDIENTE")
+            status = st.selectbox("Estado", options, index=options.index(current) if current in options else 0, key=f"social_status_{idx}_{row.get('SocialID','')}")
+            if st.button("Actualizar", key=f"social_update_{idx}_{row.get('SocialID','')}"):
+                store.actualizar_buzon_social(row.get("SocialID", ""), status)
+                load_data.clear()
+                st.rerun()
+
+
 def page_predictive() -> None:
     st.title("Predictivo")
     pack = load_model()
@@ -554,8 +784,9 @@ def page_config(data: dict) -> None:
     prefix = store.prefix()
     st.write(
         f"Pestanas del monitor: **{prefix}Noticias, {prefix}Temas, {prefix}Fuentes, "
-        f"{prefix}Recomendaciones, {prefix}Descubrimientos, {prefix}Oportunidades, {prefix}Informes, "
-        f"{prefix}Avisos y {prefix}AgentLog**."
+        f"{prefix}RESUMEN_4H, {prefix}ACCIONES, {prefix}OLE_HOY, {prefix}COBERTURA_OLE, "
+        f"{prefix}HALLAZGOS, {prefix}FUENTES_EDITOR, {prefix}BUZON_SOCIAL y {prefix}PARTES_IA**. "
+        "Las hojas tecnicas siguen disponibles como respaldo."
     )
     config = sheets_memoria.leer_config() if sheets_memoria.disponible() else {}
     if config:
@@ -578,10 +809,10 @@ def page_config(data: dict) -> None:
 
 
 with st.sidebar:
-    st.header("Monitor V10")
+    st.header("Monitor V11")
     page = st.radio(
         "Ir a",
-        ["Ahora", "Asistente", "Explorar", "Producir", "Predictivo", "Configuracion"],
+        ["Mesa editorial", "Buzón social", "Ahora técnico", "Asistente", "Explorar", "Producir", "Predictivo", "Configuracion"],
     )
     st.divider()
     if st.button("Recargar pantalla", use_container_width=True):
@@ -593,8 +824,8 @@ with st.sidebar:
             ok, message = dispatch_workflow()
             (st.success if ok else st.warning)(message)
     else:
-        st.caption("Actualizacion manual: GitHub > Actions > Monitor V9 > Run workflow.")
-    st.caption("La busqueda y los agentes corren en GitHub. La app conserva el ultimo snapshot valido.")
+        st.caption("La actualización manual se ejecuta desde GitHub > Actions. El token de GitHub es opcional.")
+    st.caption("La IA paga nunca corre sola: solo se activa desde Parte ampliado y con confirmación.")
 
 if not store.disponible():
     st.error("No estan configurados GOOGLE_SERVICE_ACCOUNT_JSON y SHEET_ID.")
@@ -604,7 +835,11 @@ data = load_data()
 if not data["themes"] and not data["control"]:
     st.warning("La conexion funciona, pero todavia no existe un snapshot del monitor. Ejecuta el workflow una vez.")
 
-if page == "Ahora":
+if page == "Mesa editorial":
+    page_desk(data)
+elif page == "Buzón social":
+    page_social_inbox(data)
+elif page == "Ahora técnico":
     page_now(data)
 elif page == "Asistente":
     page_assistant(data)

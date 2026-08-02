@@ -132,7 +132,7 @@ def enviar_telegram(texto: str, html: bool = True, silencioso: bool = False) -> 
 def main():
     simulacro = not mem.disponible()
     legacy_memory = os.environ.get("LEGACY_MEMORY_WRITES_ENABLED", "false").strip().lower() in {"1", "true", "yes", "si"}
-    print("=== MONITOR V10 - resumen, cambios y hallazgos ===", "(modo simulacro: sin Sheet configurado)" if simulacro else "")
+    print("=== MONITOR V11 - mesa editorial y memoria de Ole ===", "(modo simulacro: sin Sheet configurado)" if simulacro else "")
     print(f"modo de convivencia: escrituras heredadas={'si' if legacy_memory else 'no'}")
 
     # El workflow puede disparar esta corrida cada 20 min (como respaldo por si
@@ -299,7 +299,7 @@ def main():
         except Exception as exc:
             print(f"   snapshot online fallo: {exc}")
 
-    # Capa V10: resumen comparado, cambios accionables y hallazgos.
+    # Capa V11: resumen 4H, memoria de Ole, acciones y hallazgos.
     # e informe ejecutivo. No publica: recomienda, alerta y registra feedback.
     agent_result = {"enabled": False}
     if not simulacro and online.disponible():
@@ -315,6 +315,7 @@ def main():
                       f"{len(agent_result.get('changes', []))} cambios · "
                       f"{len(agent_result.get('discoveries', []))} hallazgos/candidatos · "
                       f"{len(agent_result.get('opportunities', []))} oportunidades · "
+                      f"{len((agent_result.get('editorial_desk') or {}).get('topics', []))} temas en resumen 4H · "
                       f"{agent_result.get('alerts_sent', 0)} alertas")
         except Exception as exc:
             print(f"   asistente editorial fallo: {exc}")

@@ -68,6 +68,42 @@ INFORMES_HEADERS = [
     "ErroresFuentes",
 ]
 AVISOS_HEADERS = ["FechaHora", "Clave", "Tipo", "Titulo"]
+
+RESUMEN_4H_HEADERS = [
+    "Corte", "Desde", "Hasta", "Orden", "Importancia", "Seccion", "Tema",
+    "QuePaso", "QueCambio", "PorQueImporta", "EstadoOle", "NotaOle", "URLOle",
+    "Accion", "Prioridad", "Medios", "Fuentes", "URLsFuentes", "URLPrincipal", "Generado"
+]
+HISTORIAL_4H_HEADERS = RESUMEN_4H_HEADERS
+ACCIONES_EDITOR_HEADERS = [
+    "ActionID", "Corte", "Prioridad", "Accion", "Estado", "TemaID", "Tema",
+    "DatoNuevo", "NotaOle", "URLOle", "Fuentes", "URLsFuentes", "Actualizado", "Notas"
+]
+OLE_HOY_HEADERS = [
+    "OleID", "PrimeraDeteccion", "UltimaDeteccion", "FechaPublicacion", "FechaActualizacion",
+    "Seccion", "TemaID", "TemaAgrupado", "Enfoque", "Titulo", "URL", "Entidades",
+    "NovedadesExternas", "AccionSugerida"
+]
+COBERTURA_OLE_EDITOR_HEADERS = [
+    "TemaID", "Tema", "Piezas", "Secciones", "Enfoques", "PrimeraDeteccion",
+    "UltimaDeteccion", "UltimoTitulo", "UltimaURL", "TitulosPublicados",
+    "NovedadesExternas", "Accion", "Sobrecobertura"
+]
+HALLAZGOS_EDITOR_HEADERS = [
+    "Corte", "Prioridad", "Tema", "QuePaso", "PorQueImporta", "EstadoOle",
+    "Accion", "Fuentes", "URLsFuentes", "URLPrincipal"
+]
+FUENTES_EDITOR_HEADERS = [
+    "FuenteID", "Fuente", "Zona", "MetodoActivo", "Estado", "Noticias",
+    "UltimoContenido", "Problema", "RespaldoSugerido"
+]
+SOCIAL_INBOX_HEADERS = [
+    "FechaHora", "SocialID", "Estado", "Plataforma", "Autor", "Titulo", "URL",
+    "Nota", "PorQue", "TemaVinculado"
+]
+PARTE_IA_HEADERS = [
+    "FechaHora", "Corte", "Modelo", "Titulo", "Texto", "Regeneracion", "TemasIncluidos"
+]
 AGENT_LOG_HEADERS = [
     "FechaHora", "Agente", "Estado", "DuracionSeg", "Recomendaciones",
     "Oportunidades", "AlertasEnviadas", "InformeEnviado", "Detalle",
@@ -143,6 +179,15 @@ def asegurar_estructura() -> None:
     _ws("Informes", INFORMES_HEADERS, rows=500)
     _ws("Avisos", AVISOS_HEADERS, rows=1000)
     _ws("AgentLog", AGENT_LOG_HEADERS, rows=1000)
+    _ws("RESUMEN_4H", RESUMEN_4H_HEADERS, rows=100)
+    _ws("HISTORIAL_4H", HISTORIAL_4H_HEADERS, rows=3000)
+    _ws("ACCIONES", ACCIONES_EDITOR_HEADERS, rows=500)
+    _ws("OLE_HOY", OLE_HOY_HEADERS, rows=500)
+    _ws("COBERTURA_OLE", COBERTURA_OLE_EDITOR_HEADERS, rows=300)
+    _ws("HALLAZGOS", HALLAZGOS_EDITOR_HEADERS, rows=300)
+    _ws("FUENTES_EDITOR", FUENTES_EDITOR_HEADERS, rows=200)
+    _ws("BUZON_SOCIAL", SOCIAL_INBOX_HEADERS, rows=1000)
+    _ws("PARTES_IA", PARTE_IA_HEADERS, rows=500)
 
 
 def _safe(value: Any, max_len: int = 45000) -> str:
@@ -518,3 +563,236 @@ def leer_agent_log(limit: int = 50) -> list[dict]:
 def url_planilla() -> str:
     _, sid = _credentials()
     return f"https://docs.google.com/spreadsheets/d/{sid}/edit" if sid else ""
+
+
+# ---------------------------------------------------------------------------
+# V11: editor-facing sheets and on-demand AI parts
+# ---------------------------------------------------------------------------
+
+def _append_rows(base: str, headers: list[str], rows: list[list[Any]], max_rows: int = 5000) -> int:
+    if not rows:
+        return 0
+    try:
+        ws = _ws(base, headers, rows=max_rows)
+        ws.append_rows([[_safe(value) for value in row] for row in rows], value_input_option="RAW")
+        values = ws.get_all_values()
+        if len(values) > max_rows:
+            kept = [values[0]] + values[-(max_rows - 1):]
+            ws.clear()
+            ws.update(range_name="A1", values=kept, value_input_option="RAW")
+        return len(rows)
+    except Exception:
+        return 0
+
+
+def _format_editorial_sheet(base: str, widths: list[int], tab_color: dict | None = None) -> None:
+    """Best-effort formatting. Failures never stop the monitor."""
+    try:
+        ws = _ws(base, ["A"])
+        requests = [
+            {
+                "updateSheetProperties": {
+                    "properties": {"sheetId": ws.id, "gridProperties": {"frozenRowCount": 1}, **({"tabColorStyle": {"rgbColor": tab_color}} if tab_color else {})},
+                    "fields": "gridProperties.frozenRowCount" + (",tabColorStyle" if tab_color else ""),
+                }
+            },
+            {
+                "repeatCell": {
+                    "range": {"sheetId": ws.id, "startRowIndex": 0, "endRowIndex": 1},
+                    "cell": {"userEnteredFormat": {"backgroundColor": {"red": 0.08, "green": 0.18, "blue": 0.34}, "textFormat": {"foregroundColor": {"red": 1, "green": 1, "blue": 1}, "bold": True}, "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP"}},
+                    "fields": "userEnteredFormat",
+                }
+            },
+            {
+                "repeatCell": {
+                    "range": {"sheetId": ws.id, "startRowIndex": 1},
+                    "cell": {"userEnteredFormat": {"verticalAlignment": "TOP", "wrapStrategy": "WRAP"}},
+                    "fields": "userEnteredFormat.verticalAlignment,userEnteredFormat.wrapStrategy",
+                }
+            },
+            {
+                "setBasicFilter": {
+                    "filter": {"range": {"sheetId": ws.id, "startRowIndex": 0, "startColumnIndex": 0, "endColumnIndex": max(1, len(widths))}}
+                }
+            },
+        ]
+        for idx, width in enumerate(widths):
+            requests.append({
+                "updateDimensionProperties": {
+                    "range": {"sheetId": ws.id, "dimension": "COLUMNS", "startIndex": idx, "endIndex": idx + 1},
+                    "properties": {"pixelSize": int(width)},
+                    "fields": "pixelSize",
+                }
+            })
+        _sheet().batch_update({"requests": requests})
+    except Exception:
+        pass
+
+
+def leer_ole_hoy() -> list[dict]:
+    return _records("OLE_HOY", OLE_HOY_HEADERS)
+
+
+def leer_cobertura_ole_editor() -> list[dict]:
+    return _records("COBERTURA_OLE", COBERTURA_OLE_EDITOR_HEADERS)
+
+
+def leer_resumen_4h() -> list[dict]:
+    return _records("RESUMEN_4H", RESUMEN_4H_HEADERS)
+
+
+def leer_acciones_editor() -> list[dict]:
+    return _records("ACCIONES", ACCIONES_EDITOR_HEADERS)
+
+
+def leer_hallazgos_editor() -> list[dict]:
+    return _records("HALLAZGOS", HALLAZGOS_EDITOR_HEADERS)
+
+
+def leer_fuentes_editor() -> list[dict]:
+    return _records("FUENTES_EDITOR", FUENTES_EDITOR_HEADERS)
+
+
+def leer_buzon_social() -> list[dict]:
+    return _records("BUZON_SOCIAL", SOCIAL_INBOX_HEADERS)
+
+
+def agregar_buzon_social(plataforma: str, autor: str, titulo: str, url: str,
+                         nota: str = "", por_que: str = "", tema: str = "") -> bool:
+    now = datetime.now(_TZ_AR).isoformat(timespec="seconds")
+    sid = _stable_id(f"{url}|{titulo}|{now}", "soc")
+    return _append("BUZON_SOCIAL", SOCIAL_INBOX_HEADERS, [
+        now, sid, "PENDIENTE", plataforma, autor, titulo, url, nota, por_que, tema,
+    ], max_rows=1000)
+
+
+def actualizar_buzon_social(social_id: str, status: str, linked_topic: str = "") -> bool:
+    rows = leer_buzon_social()
+    changed = False
+    output = []
+    for row in rows:
+        if row.get("SocialID") == social_id:
+            row["Estado"] = status
+            if linked_topic:
+                row["TemaVinculado"] = linked_topic
+            changed = True
+        output.append([row.get(h, "") for h in SOCIAL_INBOX_HEADERS])
+    if changed:
+        _replace("BUZON_SOCIAL", SOCIAL_INBOX_HEADERS, output, 1000)
+    return changed
+
+
+def actualizar_accion_editor(action_id: str, status: str, notes: str = "") -> bool:
+    rows = leer_acciones_editor()
+    changed = False
+    output = []
+    for row in rows:
+        if row.get("ActionID") == action_id:
+            row["Estado"] = status
+            if notes:
+                row["Notas"] = notes
+            row["Actualizado"] = datetime.now(_TZ_AR).isoformat(timespec="seconds")
+            changed = True
+        output.append([row.get(h, "") for h in ACCIONES_EDITOR_HEADERS])
+    if changed:
+        _replace("ACCIONES", ACCIONES_EDITOR_HEADERS, output, 500)
+    return changed
+
+
+def guardar_mesa_editorial(desk: dict, ole_entries: list[dict], ole_coverage: list[dict],
+                            source_rows: list[dict]) -> dict:
+    asegurar_estructura()
+    topics = list(desk.get("topics") or [])
+    actions = list(desk.get("actions") or [])
+    meta = dict(desk.get("meta") or {})
+    cut_key = str(meta.get("cut_key") or "")
+
+    current = leer_resumen_4h()
+    previous_cut = str(current[0].get("Corte") or "") if current else ""
+    if current and previous_cut and previous_cut != cut_key:
+        _append_rows("HISTORIAL_4H", HISTORIAL_4H_HEADERS,
+                     [[row.get(h, "") for h in HISTORIAL_4H_HEADERS] for row in current], max_rows=6000)
+
+    topic_rows = [[
+        item.get("cut_key", cut_key), item.get("window_start", ""), item.get("window_end", ""),
+        item.get("order", 0), item.get("importance", ""), item.get("section", ""),
+        item.get("topic", ""), item.get("what_happened", ""), item.get("what_changed", ""),
+        item.get("why_it_matters", ""), item.get("ole_status", ""), item.get("ole_title", ""),
+        item.get("ole_url", ""), item.get("action", ""), item.get("priority", 0),
+        item.get("media_count", 0), item.get("sources", ""), item.get("source_urls", ""),
+        item.get("url", ""), item.get("generated_at", ""),
+    ] for item in topics]
+
+    previous_actions = {row.get("ActionID", ""): row for row in leer_acciones_editor()}
+    action_rows = []
+    for item in actions:
+        old = previous_actions.get(item.get("action_id", ""), {})
+        action_rows.append([
+            item.get("action_id", ""), item.get("cut_key", cut_key), item.get("priority", 0),
+            item.get("action", ""), old.get("Estado") or item.get("status", "PENDIENTE"),
+            item.get("topic_id", ""), item.get("topic", ""), item.get("new_data", ""),
+            item.get("ole_title", ""), item.get("ole_url", ""), item.get("sources", ""),
+            item.get("source_urls", ""), item.get("updated_at", ""), old.get("Notas") or item.get("notes", ""),
+        ])
+
+    ole_rows = [[
+        item.get("ole_id", ""), item.get("first_seen", ""), item.get("last_seen", ""),
+        item.get("published_at", ""), item.get("updated_at", ""), item.get("section", ""),
+        item.get("topic_id", ""), item.get("topic", ""), item.get("focus", ""),
+        item.get("title", ""), item.get("url", ""), " | ".join(item.get("entities", []) or []),
+        " | ".join(item.get("related_external", []) or []), item.get("suggested_action", ""),
+    ] for item in ole_entries or []]
+
+    coverage_rows = [[
+        item.get("topic_id", ""), item.get("topic", ""), item.get("piece_count", 0),
+        " | ".join(item.get("sections", []) or []), " | ".join(item.get("focuses", []) or []),
+        item.get("first_seen", ""), item.get("last_seen", ""), item.get("last_title", ""),
+        item.get("last_url", ""), " || ".join(item.get("titles", []) or []),
+        " || ".join(item.get("external_updates", []) or []), item.get("suggested_action", ""),
+        item.get("overcoverage", False),
+    ] for item in ole_coverage or []]
+
+    hallazgo_rows = [[
+        item.get("cut_key", cut_key), item.get("priority", 0), item.get("topic", ""),
+        item.get("what_happened", ""), item.get("why_it_matters", ""), item.get("ole_status", ""),
+        item.get("action", ""), item.get("sources", ""), item.get("source_urls", ""), item.get("url", ""),
+    ] for item in topics if item.get("section") in {"HALLAZGOS", "BUZON SOCIAL"}]
+
+    source_values = [[
+        item.get("source_id", ""), item.get("source", ""), item.get("zone", ""),
+        item.get("active_method", ""), item.get("editorial_state", ""), item.get("items", 0),
+        item.get("last_content", ""), item.get("problem", ""), item.get("fallback", ""),
+    ] for item in source_rows or []]
+
+    counts = {
+        "summary4h": _replace("RESUMEN_4H", RESUMEN_4H_HEADERS, topic_rows, 100),
+        "actions": _replace("ACCIONES", ACCIONES_EDITOR_HEADERS, action_rows, 500),
+        "ole_today": _replace("OLE_HOY", OLE_HOY_HEADERS, ole_rows, 500),
+        "ole_coverage": _replace("COBERTURA_OLE", COBERTURA_OLE_EDITOR_HEADERS, coverage_rows, 300),
+        "findings": _replace("HALLAZGOS", HALLAZGOS_EDITOR_HEADERS, hallazgo_rows, 300),
+        "source_editor": _replace("FUENTES_EDITOR", FUENTES_EDITOR_HEADERS, source_values, 200),
+    }
+    _format_editorial_sheet("RESUMEN_4H", [110, 125, 125, 65, 115, 145, 300, 420, 360, 360, 155, 260, 230, 125, 80, 75, 240, 240, 230, 145], {"red": 0.07, "green": 0.35, "blue": 0.65})
+    _format_editorial_sheet("ACCIONES", [160, 110, 80, 120, 110, 140, 320, 380, 260, 230, 220, 220, 150, 260], {"red": 0.78, "green": 0.25, "blue": 0.12})
+    _format_editorial_sheet("OLE_HOY", [150, 145, 145, 140, 140, 130, 140, 300, 130, 360, 240, 180, 360, 180], {"red": 0.1, "green": 0.55, "blue": 0.22})
+    _format_editorial_sheet("COBERTURA_OLE", [150, 320, 70, 180, 180, 145, 145, 320, 230, 480, 420, 180, 110], {"red": 0.1, "green": 0.55, "blue": 0.22})
+    _format_editorial_sheet("HALLAZGOS", [110, 80, 320, 420, 400, 150, 120, 240, 240, 230], {"red": 0.55, "green": 0.2, "blue": 0.7})
+    _format_editorial_sheet("FUENTES_EDITOR", [120, 230, 120, 150, 210, 80, 155, 360, 360], {"red": 0.35, "green": 0.35, "blue": 0.35})
+    return counts
+
+
+def guardar_parte_ia(cut_key: str, title: str, text: str, model: str,
+                     topic_count: int, regeneration: bool = False) -> bool:
+    return _append("PARTES_IA", PARTE_IA_HEADERS, [
+        datetime.now(_TZ_AR).isoformat(timespec="seconds"), cut_key, model, title, text,
+        "si" if regeneration else "no", topic_count,
+    ], max_rows=500)
+
+
+def leer_partes_ia(limit: int = 50) -> list[dict]:
+    return _records("PARTES_IA", PARTE_IA_HEADERS)[-max(1, limit):]
+
+
+def parte_ia_para_corte(cut_key: str) -> dict:
+    rows = [row for row in leer_partes_ia(200) if row.get("Corte") == cut_key]
+    return rows[-1] if rows else {}
