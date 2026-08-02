@@ -121,7 +121,7 @@ def build_ole_today(ole_items: list[dict] | None, previous: list[dict] | None = 
                 score = _similarity(title, str(rec.get("ole_match_title") or ""))
                 if score >= 0.45:
                     scored.append((score, rec))
-            related = [x[1] for x in sorted(scored, reverse=True)[:3]]
+            related = [x[1] for x in sorted(scored, key=lambda pair: pair[0], reverse=True)[:3]]
         actions = unique_strings([str(rec.get("action") or "") for rec in related if rec.get("action")])
         external = unique_strings([str(rec.get("title") or "") for rec in related if rec.get("title")])
         entries.append({
