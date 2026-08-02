@@ -5,6 +5,7 @@ from editorial_agents.coverage import enrich_themes
 from editorial_agents.curator import curate
 from editorial_agents.discovery import generate as generate_discoveries
 from editorial_agents.executive import alert_message, build_report
+from editorial_agents.briefing import build as build_briefing
 from editorial_agents.opportunities import generate as generate_opportunities
 
 
@@ -83,6 +84,39 @@ class EditorialAgentTests(unittest.TestCase):
         self.assertTrue(discoveries)
         self.assertGreaterEqual(discoveries[0]["score"], 58)
         self.assertIn(discoveries[0]["category"], {"HISTORIA RARA", "DATO O RECORD"})
+
+    def test_discovery_returns_best_candidates_even_below_strong_threshold(self):
+        now = datetime.now(timezone.utc).isoformat()
+        results = {
+            "bbc": [{
+                "titulo": "European club changes its stadium access system for supporters",
+                "url": "https://example.com/stadium",
+                "publisher_original": "BBC Sport",
+                "fecha_publicacion": now,
+            }]
+        }
+        discoveries = generate_discoveries(results, [], max_items=5)
+        self.assertEqual(len(discoveries), 1)
+        self.assertIn(discoveries[0]["status"], {"HALLAZGO FUERTE", "CANDIDATO", "EXPLORAR"})
+
+    def test_briefing_reports_only_real_delta(self):
+        previous = [{
+            "ClusterID": "c_test", "Titulo": "Tema de prueba", "Medios": "2",
+            "TieneOle": "no", "Accion": "OBSERVAR", "Fuentes": [],
+        }]
+        current = [{
+            "cluster_id": "c_test", "titulo": "Tema de prueba", "cant_medios": 4,
+            "tiene_ole": False, "accion": "ACTUALIZAR", "fuentes": [],
+        }]
+        recs = [{
+            "cluster_id": "c_test", "action": "ACTUALIZAR", "coverage_status": "CUBIERTO_CON_NOVEDAD",
+            "reason": "aparecio un dato nuevo",
+        }]
+        changes, summary = build_briefing(current, previous, recs, [], [])
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["change_type"], "ACTUALIZAR NOTA")
+        self.assertIn("paso de 2 a 4", changes[0]["what_changed"])
+        self.assertIn("QUE CAMBIO PARA AGREGAR", summary["plain_text"])
 
     def test_report_separates_operations_and_findings(self):
         recs = curate(enrich_themes(self.themes, []), self.agenda)
