@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from .freshness import FreshnessDecision, classify_evidence
-from .utils import normalize_text, now_ar, stable_id, unique_strings
+from .utils import (explicit_date_in_text, normalize_text, now_ar, parse_datetime,
+                    stable_id, unique_strings)
 
 _ACTIONABLE = {"PUBLICAR AHORA", "ACTUALIZAR", "VERIFICAR", "PROFUNDIZAR", "SEGUIR"}
 _OTHER_SPORTS = (
@@ -89,40 +89,74 @@ def _evidence_from_theme(row: dict) -> list[dict]:
             "title": str(news.get("titulo") or news.get("title") or ""),
             "url": str(news.get("url") or ""),
             "published_at": str(news.get("fecha_publicacion") or news.get("fecha") or ""),
-            "updated_at": str(news.get("fecha_actualizacion") or news.get("updated_at") or ""),
-            "article_published_at": str(news.get("article_published_at") or news.get("fecha_publicacion_verificada") or ""),
-            "article_updated_at": str(news.get("article_updated_at") or news.get("fecha_actualizacion_verificada") or ""),
             "source_id": source_id,
-            "source_url": source_url,
             "discovery_channel": discovery_channel,
             "date_trust": date_trust,
         })
     return out
 
 
-def _theme_freshness(row: dict, start: datetime, now: datetime) -> tuple[FreshnessDecision, list[dict]]:
-    evidence = _evidence_from_theme(row)
-    if row.get("published_at") or row.get("FechaPublicacion") or row.get("fecha_publicacion"):
-        evidence.append({
-            "published_at": str(row.get("published_at") or row.get("FechaPublicacion") or row.get("fecha_publicacion") or ""),
-            "updated_at": str(row.get("updated_at") or row.get("FechaActualizacion") or row.get("fecha_actualizacion") or ""),
-            "article_published_at": str(row.get("article_published_at") or row.get("fecha_publicacion_verificada") or ""),
-            "date_trust": str(row.get("date_trust") or row.get("DateTrust") or "missing"),
-            "publisher": str(row.get("publisher") or "Tema"),
-        })
-    return classify_evidence(evidence, _title(row), start, now), evidence
 
 
-def _discovery_freshness(discovery: dict, start: datetime, now: datetime) -> FreshnessDecision:
-    evidence = discovery.get("evidence") or discovery.get("Evidencia") or []
-    if not isinstance(evidence, list) or not evidence:
-        evidence = [{
-            "published_at": discovery.get("published_at") or discovery.get("FechaPublicacion"),
-            "article_published_at": discovery.get("article_published_at") or discovery.get("FechaPublicacionVerificada"),
-            "date_trust": discovery.get("date_trust") or discovery.get("DateTrust") or "missing",
-            "publisher": discovery.get("publisher") or discovery.get("Publishers") or "",
-        }]
-    return classify_evidence(evidence, _title(discovery), start, now)
+def _activity_dates(row: dict, trusted_only: bool = False) -> list[datetime]:
+    dates: list[datetime] = []
+    for item in _evidence_from_theme(row):
+        trust = str(item.get("date_trust") or "").lower()
+        if trusted_only and trust in {"discovery_timestamp", "missing", "unverified"}:
+            continue
+        dt = parse_datetime(item.get("published_at"))
+        if dt:
+            dates.append(dt)
+    # Fechas a nivel de tema son confiables solo si fueron calculadas por el
+    # publisher o por metadata de artículo. Un timestamp agregado por Google
+    # News no debe ascender aquí como fecha editorial.
+    row_trust = str(row.get("date_trust") or row.get("DateTrust") or "").lower()
+    if not trusted_only or row_trust not in {"discovery_timestamp", "missing", "unverified"}:
+        for key in ("published_at", "FechaPublicacion", "fecha_publicacion", "updated_at", "FechaActualizacion"):
+            dt = parse_datetime(row.get(key))
+            if dt:
+                dates.append(dt)
+    return dates
+
+
+def _is_in_cut(row: dict, change: dict | None, start: datetime, now: datetime) -> tuple[bool, str]:
+    """Decide si un tema pertenece realmente al corte de cuatro horas.
+
+    Regla estricta: una primera detección no equivale a una publicación nueva.
+    Solo se acepta una historia con al menos una fecha confiable del publisher
+    dentro de la ventana. Esto evita que portadas, buscadores o Google News
+    reciclen notas de hace días o semanas como si fueran actuales.
+    """
+    title = _title(row)
+    explicit = explicit_date_in_text(title, now)
+    if explicit is not None and explicit.date() < start.date():
+        return False, "FECHA EXPLICITA ANTERIOR"
+
+    trusted_dates = _activity_dates(row, trusted_only=True)
+    if trusted_dates:
+        latest = max(trusted_dates)
+        inside = start <= latest <= now + timedelta(minutes=10)
+        return inside, "FECHA VERIFICADA EN VENTANA" if inside else "FUERA DE VENTANA"
+
+    any_dates = _activity_dates(row, trusted_only=False)
+    if any_dates:
+        return False, "SOLO FECHA DE DESCUBRIMIENTO NO VERIFICADA"
+
+    # Antes se aceptaba cualquier cluster marcado como nuevo aunque no tuviera
+    # fecha. Ese atajo fue el que dejó entrar historias viejas del Mundial y de
+    # aniversarios de Scaloni. En el resumen 4H se excluyen sin excepción.
+    return False, "SIN FECHA VERIFICABLE"
+
+
+def _discovery_in_cut(discovery: dict, start: datetime, now: datetime) -> bool:
+    explicit = explicit_date_in_text(_title(discovery), now)
+    if explicit is not None and explicit.date() < start.date():
+        return False
+    trust = str(discovery.get("date_trust") or discovery.get("DateTrust") or "publisher_timestamp").lower()
+    if trust in {"discovery_timestamp", "missing", "unverified"}:
+        return False
+    dt = parse_datetime(discovery.get("published_at") or discovery.get("FechaPublicacion"))
+    return bool(dt and start <= dt <= now + timedelta(minutes=10))
 
 
 def _source_line(evidence: list[dict], max_items: int = 5) -> tuple[str, str]:
@@ -133,10 +167,7 @@ def _source_line(evidence: list[dict], max_items: int = 5) -> tuple[str, str]:
 
 def _what_happened(title: str, media: int, evidence: list[dict], status: str = "") -> str:
     if evidence:
-        variants = unique_strings([
-            str(item.get("title") or "") for item in evidence
-            if item.get("title") and normalize_text(item.get("title", "")) != normalize_text(title)
-        ])
+        variants = unique_strings([str(item.get("title") or "") for item in evidence if item.get("title") and normalize_text(item.get("title", "")) != normalize_text(title)])
         if variants:
             return f"{title}. Entre las publicaciones relacionadas aparece: {variants[0][:220]}."
     if media > 1:
@@ -154,14 +185,10 @@ def _ole_status(rec: dict | None, row: dict) -> tuple[str, str, str]:
     return status, str(rec.get("ole_match_title") or rec.get("TituloOle") or ""), str(rec.get("ole_match_url") or rec.get("URLOle") or "")
 
 
-def _action(rec: dict | None, row: dict, freshness_status: str = "CONFIRMADO") -> str:
+def _action(rec: dict | None, row: dict) -> str:
     action = str((rec or {}).get("action") or (rec or {}).get("Accion") or row.get("accion") or row.get("Accion") or "INFORMARSE").upper()
     if action == "OBSERVAR":
-        action = "INFORMARSE"
-    # Un feed directo permite informar el panorama, pero no debe disparar una
-    # orden de publicacion sin verificacion adicional.
-    if freshness_status == "PROBABLE" and action == "PUBLICAR AHORA":
-        return "VERIFICAR"
+        return "INFORMARSE"
     return action
 
 
@@ -189,18 +216,18 @@ def _is_duplicate(title: str, selected: list[dict]) -> bool:
     return False
 
 
-def _build_topic(row: dict, rec: dict | None, change: dict | None,
-                 freshness: FreshnessDecision, evidence: list[dict], order_hint: int = 0) -> dict:
+def _build_topic(row: dict, rec: dict | None, change: dict | None, order_hint: int = 0) -> dict:
     title = _title(row)
+    evidence = _evidence_from_theme(row)
     media = _int(row.get("cant_medios") or row.get("Medios") or (rec or {}).get("media_count") or 0)
     status, ole_title, ole_url = _ole_status(rec, row)
-    action = _action(rec, row, freshness.status)
+    action = _action(rec, row)
     priority = _priority(rec, row, fallback=max(20, 100 - order_hint))
     sources, source_urls = _source_line(evidence)
     change_text = str((change or {}).get("what_changed") or (change or {}).get("QueCambio") or "").strip()
     if not change_text:
         if row.get("_carried_from_previous"):
-            change_text = "Se conserva del último panorama completo; la fuente no estuvo disponible en este corte parcial."
+            change_text = "Se conserva del ultimo panorama completo; la fuente no estuvo disponible en este corte parcial."
         elif str(row.get("nuevo") or row.get("Nuevo") or "").lower() in {"true", "si", "1"}:
             change_text = "Ingresó en este corte."
         else:
@@ -223,32 +250,6 @@ def _build_topic(row: dict, rec: dict | None, change: dict | None,
         "source_urls": source_urls,
         "url": _url(row),
         "origin": "PANORAMA PREVIO" if row.get("_carried_from_previous") else "PANORAMA",
-        "freshness_status": freshness.status,
-        "freshness_reason": freshness.reason,
-        "freshness_timestamp": freshness.timestamp.isoformat(timespec="minutes") if freshness.timestamp else "",
-        "freshness_trust": freshness.trust,
-        "freshness_publisher": freshness.publisher,
-    }
-
-
-def _audit_row(kind: str, item_id: str, title: str, decision: FreshnessDecision,
-               sources: str = "", url: str = "", destination: str = "") -> dict:
-    return {
-        "kind": kind,
-        "item_id": item_id,
-        "title": title,
-        "status": decision.status,
-        "reason": decision.reason,
-        "timestamp": decision.timestamp.isoformat(timespec="minutes") if decision.timestamp else "",
-        "trust": decision.trust,
-        "publisher": decision.publisher,
-        "sources": sources,
-        "url": url,
-        "destination": destination or (
-            "RESUMEN" if decision.status in {"CONFIRMADO", "PROBABLE"}
-            else "PARA VERIFICAR" if decision.status == "CANDIDATO"
-            else "EXCLUIDO"
-        ),
     }
 
 
@@ -263,77 +264,60 @@ def build_editorial_desk(themes: list[dict], changes: list[dict], recommendation
     change_map = {_cluster(change): change for change in changes or []}
     theme_map = {_cluster(theme): theme for theme in themes or []}
     selected: list[dict] = []
-    audit: list[dict] = []
-    freshness_map: dict[str, tuple[FreshnessDecision, list[dict]]] = {}
 
-    status_ids: dict[str, set[str]] = {"CONFIRMADO": set(), "PROBABLE": set(), "CANDIDATO": set(), "EXCLUIDO": set()}
+    eligible_theme_ids: set[str] = set()
+    exclusion_reasons: dict[str, str] = {}
     for theme in themes or []:
         cid = _cluster(theme)
-        decision, evidence = _theme_freshness(theme, start, now)
-        freshness_map[cid] = (decision, evidence)
-        status_ids.setdefault(decision.status, set()).add(cid)
-        sources, _ = _source_line(evidence)
-        audit.append(_audit_row("TEMA", cid, _title(theme), decision, sources, _url(theme)))
+        eligible, reason = _is_in_cut(theme, change_map.get(cid), start, now)
+        if eligible:
+            eligible_theme_ids.add(cid)
+        else:
+            exclusion_reasons[cid] = reason
 
-    def add_theme(row: dict, rec: dict | None, change: dict | None, order_hint: int = 0) -> None:
-        cid = _cluster(row)
-        decision, evidence = freshness_map.get(cid, _theme_freshness(row, start, now))
-        if decision.status not in {"CONFIRMADO", "PROBABLE"}:
-            return
-        item = _build_topic(row, rec, change, decision, evidence, order_hint)
+    # 1. Real changes and actionable items first, but only if the underlying
+    # story had activity inside this four-hour window.
+    change_order = sorted(
+        [item for item in (changes or []) if _cluster(item) in eligible_theme_ids],
+        key=lambda item: -_int(item.get("priority") or item.get("Prioridad") or 0),
+    )
+    for change in change_order:
+        cid = _cluster(change)
+        row = theme_map.get(cid) or change
+        item = _build_topic(row, rec_map.get(cid), change, len(selected))
         if not _is_duplicate(item["topic"], selected):
             selected.append(item)
-
-    # Confirmados primero; después probables. Dentro de cada grupo, cambios y
-    # acciones tienen prioridad sobre el inventario general.
-    for level in ("CONFIRMADO", "PROBABLE"):
-        change_order = sorted(
-            [item for item in (changes or []) if _cluster(item) in status_ids[level]],
-            key=lambda item: -_int(item.get("priority") or item.get("Prioridad") or 0),
-        )
-        for change in change_order:
-            cid = _cluster(change)
-            add_theme(theme_map.get(cid) or change, rec_map.get(cid), change, len(selected))
-            if len(selected) >= max_topics:
-                break
         if len(selected) >= max_topics:
             break
+
+    # 2. Recommendations that did not produce a delta.
+    if len(selected) < max_topics:
         rec_order = sorted(
-            [item for item in (recommendations or []) if _cluster(item) in status_ids[level]],
+            [item for item in (recommendations or []) if _cluster(item) in eligible_theme_ids],
             key=lambda item: -_int(item.get("priority") or item.get("Prioridad") or 0),
         )
         for rec in rec_order:
             cid = _cluster(rec)
-            add_theme(theme_map.get(cid) or rec, rec, change_map.get(cid), len(selected))
+            row = theme_map.get(cid) or rec
+            item = _build_topic(row, rec, change_map.get(cid), len(selected))
+            if not _is_duplicate(item["topic"], selected):
+                selected.append(item)
             if len(selected) >= max_topics:
                 break
-        if len(selected) >= max_topics:
-            break
-        for pos, theme in enumerate(themes or [], start=1):
-            if _cluster(theme) not in status_ids[level]:
-                continue
-            add_theme(theme, rec_map.get(_cluster(theme)), change_map.get(_cluster(theme)), pos)
-            if len(selected) >= max_topics:
-                break
-        if len(selected) >= max_topics:
-            break
 
-    # Hallazgos firmes se muestran solo con actualidad confirmada o probable.
+    # 3. Discovery candidates: always keep a few so the editor does not need to browse abroad.
     for discovery in discoveries or []:
-        decision = _discovery_freshness(discovery, start, now)
-        status = str(discovery.get("status") or discovery.get("Estado") or "").upper()
-        evidence = discovery.get("evidence") or discovery.get("Evidencia") or []
-        sources, source_urls = _source_line(evidence if isinstance(evidence, list) else [])
-        did = str(discovery.get("discovery_id") or discovery.get("DiscoveryID") or stable_id(_title(discovery), "d"))
-        destination = "HALLAZGOS" if status in {"HALLAZGO FUERTE", "HALLAZGO"} and decision.accepted else "PARA VERIFICAR"
-        audit.append(_audit_row("HALLAZGO", did, _title(discovery), decision, sources, _url(discovery), destination))
-        if len(selected) >= max_topics or status not in {"HALLAZGO FUERTE", "HALLAZGO"} or not decision.accepted:
+        if len(selected) >= max_topics:
+            break
+        if not _discovery_in_cut(discovery, start, now):
             continue
         title = _title(discovery)
         if not title or _is_duplicate(title, selected):
             continue
+        evidence = discovery.get("evidence") or discovery.get("Evidencia") or []
+        sources, source_urls = _source_line(evidence if isinstance(evidence, list) else [])
         selected.append({
-            "topic_id": did,
+            "topic_id": str(discovery.get("discovery_id") or discovery.get("DiscoveryID") or stable_id(title, "d")),
             "section": "HALLAZGOS",
             "topic": title,
             "what_happened": str(discovery.get("reason") or discovery.get("Motivo") or title),
@@ -349,18 +333,9 @@ def build_editorial_desk(themes: list[dict], changes: list[dict], recommendation
             "source_urls": source_urls,
             "url": _url(discovery),
             "origin": "DESCUBRIMIENTO",
-            "finding_status": status,
-            "finding_category": str(discovery.get("category") or discovery.get("Categoria") or ""),
-            "confidence": _int(discovery.get("confidence") or discovery.get("Confianza") or 0),
-            "confidence_reason": str(discovery.get("confidence_reason") or discovery.get("MotivoConfianza") or ""),
-            "editorial_signal_count": _int(discovery.get("editorial_signal_count") or discovery.get("SenalesEditoriales") or 0),
-            "freshness_status": decision.status,
-            "freshness_reason": decision.reason,
-            "freshness_timestamp": decision.timestamp.isoformat(timespec="minutes") if decision.timestamp else "",
-            "freshness_trust": decision.trust,
-            "freshness_publisher": decision.publisher,
         })
 
+    # 4. Manually forwarded social links are included as a distinct queue.
     for social in social_items or []:
         if len(selected) >= max_topics:
             break
@@ -372,19 +347,38 @@ def build_editorial_desk(themes: list[dict], changes: list[dict], recommendation
             continue
         selected.append({
             "topic_id": str(social.get("SocialID") or social.get("social_id") or stable_id(title, "soc")),
-            "section": "BUZON SOCIAL", "topic": title,
+            "section": "BUZON SOCIAL",
+            "topic": title,
             "what_happened": str(social.get("Nota") or social.get("note") or "Enlace enviado por un editor para incorporar al radar."),
             "what_changed": "Ingreso manual al buzón social.",
             "why_it_matters": str(social.get("PorQue") or social.get("why") or "Requiere verificación y contextualización."),
-            "ole_status": "POR COMPARAR", "ole_title": "", "ole_url": "", "action": "VERIFICAR",
-            "priority": 65, "media_count": 1,
+            "ole_status": "POR COMPARAR",
+            "ole_title": "",
+            "ole_url": "",
+            "action": "VERIFICAR",
+            "priority": 65,
+            "media_count": 1,
             "sources": str(social.get("Autor") or social.get("author") or social.get("Plataforma") or "Red social"),
             "source_urls": str(social.get("URL") or social.get("url") or ""),
-            "url": str(social.get("URL") or social.get("url") or ""), "origin": "SOCIAL",
-            "freshness_status": "CANDIDATO", "freshness_reason": "INGRESO_MANUAL",
-            "freshness_timestamp": "", "freshness_trust": "manual", "freshness_publisher": "Editor",
+            "url": str(social.get("URL") or social.get("url") or ""),
+            "origin": "SOCIAL",
         })
 
+
+    # 5. Completa solo con temas que pertenecen realmente a la ventana.
+    # Si hubo menos de 30 asuntos, se muestran menos: no se rellena con notas
+    # viejas para alcanzar una cuota artificial.
+    for pos, theme in enumerate(themes or [], start=1):
+        if len(selected) >= max_topics:
+            break
+        if _cluster(theme) not in eligible_theme_ids:
+            continue
+        title = _title(theme)
+        if not title or _is_duplicate(title, selected):
+            continue
+        selected.append(_build_topic(theme, rec_map.get(_cluster(theme)), change_map.get(_cluster(theme)), pos))
+
+    # Keep the result useful even when the day is quiet; do not pad with empty rows.
     selected = selected[:max_topics]
     for idx, item in enumerate(selected, start=1):
         item["order"] = idx
@@ -392,43 +386,54 @@ def build_editorial_desk(themes: list[dict], changes: list[dict], recommendation
         item["window_start"] = start.isoformat(timespec="minutes")
         item["window_end"] = end.isoformat(timespec="minutes")
         item["generated_at"] = now.isoformat(timespec="seconds")
-        if item.get("freshness_status") == "CONFIRMADO" and idx <= 10:
+        if idx <= 10:
             item["importance"] = "IMPRESCINDIBLE"
         elif item["section"] == "HALLAZGOS":
             item["importance"] = "HALLAZGO"
-        elif item.get("freshness_status") == "PROBABLE":
-            item["importance"] = "PROBABLE"
         else:
             item["importance"] = "PANORAMA"
 
+    actionable = [item for item in selected if item["action"] in _ACTIONABLE and item["action"] != "INFORMARSE"]
     actions = []
-    for item in selected:
-        if item["action"] not in _ACTIONABLE or item["action"] == "INFORMARSE":
-            continue
+    for item in actionable:
         actions.append({
             "action_id": stable_id(f"{item['topic_id']}|{item['action']}|{cut_key}", "act"),
-            "cut_key": cut_key, "priority": item["priority"], "action": item["action"],
-            "status": "PENDIENTE", "topic_id": item["topic_id"], "topic": item["topic"],
-            "new_data": item["what_changed"], "ole_title": item["ole_title"], "ole_url": item["ole_url"],
-            "sources": item["sources"], "source_urls": item["source_urls"],
-            "updated_at": item["generated_at"], "notes": "",
+            "cut_key": cut_key,
+            "priority": item["priority"],
+            "action": item["action"],
+            "status": "PENDIENTE",
+            "topic_id": item["topic_id"],
+            "topic": item["topic"],
+            "new_data": item["what_changed"],
+            "ole_title": item["ole_title"],
+            "ole_url": item["ole_url"],
+            "sources": item["sources"],
+            "source_urls": item["source_urls"],
+            "updated_at": item["generated_at"],
+            "notes": "",
         })
 
     broken = [source for source in source_health or [] if str(source.get("estado") or source.get("Estado") or "").lower() != "ok"]
     meta = {
-        "cut_key": cut_key, "window_start": start.isoformat(timespec="minutes"),
-        "window_end": end.isoformat(timespec="minutes"), "generated_at": now.isoformat(timespec="seconds"),
-        "topic_count": len(selected), "action_count": len(actions),
-        "confirmed_count": sum(1 for item in selected if item.get("freshness_status") == "CONFIRMADO"),
-        "probable_count": sum(1 for item in selected if item.get("freshness_status") == "PROBABLE"),
-        "candidate_count": len(status_ids.get("CANDIDATO", set())),
-        "excluded_count": len(status_ids.get("EXCLUIDO", set())),
+        "cut_key": cut_key,
+        "window_start": start.isoformat(timespec="minutes"),
+        "window_end": end.isoformat(timespec="minutes"),
+        "generated_at": now.isoformat(timespec="seconds"),
+        "topic_count": len(selected),
+        "action_count": len(actions),
         "finding_count": sum(1 for item in selected if item["section"] == "HALLAZGOS"),
         "social_count": sum(1 for item in selected if item["section"] == "BUZON SOCIAL"),
-        "broken_source_count": len(broken), "minimum_target": min_topics,
+        "broken_source_count": len(broken),
+        "minimum_target": min_topics,
         "cut_quality": str((cut_quality or {}).get("state") or "COMPLETO"),
         "cut_quality_label": str((cut_quality or {}).get("label") or ""),
         "source_coverage_pct": (cut_quality or {}).get("coverage_pct", 100),
         "snapshot_preserved": bool((cut_quality or {}).get("preserve_previous")),
+        "carried_topic_count": sum(1 for item in selected if item.get("origin") == "PANORAMA PREVIO"),
+        "excluded_outside_window": len(exclusion_reasons),
+        "excluded_unverified_date": sum(
+            1 for reason in exclusion_reasons.values()
+            if "VERIFIC" in reason or "DESCUBRIMIENTO" in reason
+        ),
     }
-    return {"topics": selected, "actions": actions, "audit": audit, "meta": meta}
+    return {"topics": selected, "actions": actions, "meta": meta}
